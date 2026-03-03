@@ -23,14 +23,14 @@ Can we build AI models that decode brain signals across different people? We com
 
 ## 🏗️ Architectures
 
-| Model | Owner | Parameters | Key Feature |
-|-------|-------|------------|-------------|
-| **EEGNet** | Person D | ~2K | Compact CNN baseline |
-| **LSTM** | Person B | TBD | Temporal modeling |
-| **CNN+LSTM** | Person A | TBD | Hybrid spatial-temporal |
-| **CNN+GRU** | Person C | TBD | Alternative recurrent hybrid |
-| **TCN** | Person A | TBD | Dilated convolutions |
-| **Transformer** | Person B | TBD | Spatial-temporal attention |
+| Model | Parameters | Key Feature |
+|-------|------------|-------------|
+| **EEGNet** | ~2K | Compact CNN baseline |
+| **LSTM** | TBD | Temporal modeling |
+| **CNN+LSTM** | TBD | Hybrid spatial-temporal |
+| **CNN+GRU** | TBD | Alternative recurrent hybrid |
+| **TCN** | TBD | Dilated convolutions |
+| **Transformer** | TBD | Spatial-temporal attention |
 
 ## 🚀 Quick Start
 ```bash
@@ -74,10 +74,6 @@ python src/evaluate.py --model eegnet --eval_mode loso
 - BCI Competition IV Dataset 2a: [Link](http://www.bbci.de/competition/iv/)
 - EEGNet Paper: Lawhern et al. (2018)
 - PhysioNet Dataset: Schalk et al. (2004)
-
-## 📄 License
-
-[Choose appropriate license - MIT, Apache 2.0, etc.]
 
 ---
 
