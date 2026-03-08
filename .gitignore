@@ -1,2 +1,5 @@
 Shubhan.md
-.venv/
+.venv/__pycache__/
+*.pyc
+results/
+experiments/checkpoints/
