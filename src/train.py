@@ -70,6 +70,7 @@ def train_one_epoch(
         avg_loss: average cross-entropy loss over all batches
         accuracy: fraction of correctly classified trials
     """
+    
     model.train()
     total_loss = 0.0
     correct = 0
