@@ -2,7 +2,7 @@
 
 ## Overview
 
-`src/data/preprocess.py` loads all 18 `.mat` subject files (9 training + 9 evaluation), applies a Butterworth bandpass filter, extracts per-trial windows, and writes the resulting tensors to `data/processed/bci_competition_iv_2a/`.
+`src/data/preprocess.py` loads all 18 `.mat` subject files (9 training + 9 evaluation), applies the EEGNet paper preprocessing pipeline (Lawhern et al. 2018), and writes the resulting tensors to `data/processed/bci_competition_iv_2a/`.
 
 ---
 
@@ -10,17 +10,24 @@
 
 Each `.mat` file contains a `data` struct array of shape `(1, 9)` — one element per recording run. Each run element has:
 
-| Field       | Shape            | Description                                |
-|-------------|------------------|--------------------------------------------|
-| `X`         | `(n_samples, 25)`| Continuous EEG+EOG signal (µV, float64)    |
-| `trial`     | `(n_trials,)`    | Sample index of each trial cue onset       |
-| `y`         | `(n_trials,)`    | Class label: 1=Left Hand, 2=Right Hand, 3=Both Feet, 4=Tongue |
-| `artifacts` | `(n_trials,)`    | 0 = clean, 1 = artifact-contaminated       |
-| `fs`        | scalar           | Sampling rate (250 Hz)                     |
-| `gender`    | str              | Subject demographic                        |
-| `age`       | int              | Subject demographic                        |
+| Field       | Shape             | Description                                               |
+|-------------|-------------------|-----------------------------------------------------------|
+| `X`         | `(n_samples, 25)` | Continuous EEG+EOG signal (V, float64)                    |
+| `trial`     | `(n_trials,)`     | Sample index of each trial cue onset                      |
+| `y`         | `(n_trials,)`     | Class label: 1=Left Hand, 2=Right Hand, 3=Feet, 4=Tongue |
+| `artifacts` | `(n_trials,)`     | 0 = clean, 1 = artifact-contaminated                      |
+| `fs`        | scalar            | Sampling rate (250 Hz)                                    |
 
-Channels 1–22 are EEG; channels 23–25 are EOG and are discarded after filtering.
+Channels 1–22 are EEG; channels 23–25 are EOG and are discarded before filtering.
+
+### Run structure (T session)
+
+| Run indices | Content                   | Trials  |
+|-------------|---------------------------|---------|
+| 0–2         | Non-MI (fixation/rest)    | 0       |
+| 3–8         | Motor imagery             | 48 each |
+
+Total per T session: **288 MI trials** (6 runs × 48).
 
 ---
 
@@ -28,45 +35,49 @@ Channels 1–22 are EEG; channels 23–25 are EOG and are discarded after filter
 
 ### 1. Aggregation across runs (`load_mat`)
 
-All 9 runs per subject are concatenated into a single continuous signal. The `trial` onset indices from each run are offset by the cumulative sample count of all prior runs so they remain valid after concatenation.
+All 9 runs are concatenated into a single continuous signal. Trial onset indices are offset by the cumulative sample count of prior runs. The run index (0-based) for each trial is recorded in a `run` array.
 
 ```
-X_full   = vstack([run.X for run in runs])          # (N_total_samples, 25)
-trial_abs = trial_local + cumulative_sample_offset   # absolute onset positions
+X_full    = vstack([run.X for run in runs])           # (N_total_samples, 25)
+trial_abs = trial_local + cumulative_sample_offset    # absolute onset positions
+run[i]    = run_index for trial i                     # (n_trials,)
 ```
 
-### 2. Butterworth bandpass filter (`bandpass_filter`)
+### 2. Resample 250 Hz → 128 Hz
 
-A 5th-order Butterworth bandpass filter is applied to the full continuous signal (all 25 channels) using `scipy.signal.sosfiltfilt` (zero-phase, forward-backward pass, no phase distortion).
+`scipy.signal.resample_poly` resamples the continuous signal before any epoching. Trial onset indices are scaled proportionally.
 
-- **Passband:** 4–40 Hz
-  - Lower bound (4 Hz) captures the mu (8–13 Hz) and beta (13–30 Hz) motor imagery bands while rejecting slow drifts and DC offsets.
-  - Upper bound (40 Hz) rejects high-frequency noise and line interference (50/60 Hz) above the motor bands.
-- **Order:** 5 (steeper roll-off than a lower-order filter, standard for EEG)
-- **Implementation:** Second-order sections (`sos`) numerically stable form; `sosfiltfilt` applies the filter twice (forward + backward) to achieve zero phase shift.
+### 3. Convert V → µV
 
-### 3. Trial window extraction (`extract_trials`)
+Multiply by 1e6 to match the scale expected by the EEGNet paper.
 
-For each trial onset index, a fixed-length window is sliced from the filtered signal:
+### 4. Causal Butterworth bandpass filter (`bandpass_filter`)
+
+- **Passband:** 4–38 Hz
+- **Order:** 3 (causal, forward-only via `sosfilt`)
+- Applied to the full continuous signal on EEG channels only (22 channels)
+
+### 5. Exponential running standardization (`exp_running_standardize`)
+
+Per-channel online normalization on the continuous signal:
 
 ```
-window = X_filtered[onset : onset + 1000, :22]   # (1000, 22)
-epoch  = window.T                                  # (22, 1000)
+mean ← (1 - α) * mean + α * x
+var  ← (1 - α) * var  + α * (x - mean)²
+x_norm = (x - mean) / sqrt(var + ε)
 ```
 
-- **Window:** 0 to 4 seconds after cue onset → **1000 samples** at 250 Hz
-- **Channels:** Only the first 22 EEG channels are retained (EOG discarded)
-- Trials whose window would extend past the end of the signal are silently dropped (rare edge case at the end of evaluation runs)
+- `α = 1e-3`, initialized from the first 1000 samples, `ε = 1e-4`
 
-### 4. Output format
+### 6. Trial window extraction (`extract_trials`)
 
-Final tensor shape per subject/split: **(n_trials, 22, 1000)**
+```
+window = X_norm[onset + 64 : onset + 320, :22]   # 0.5–2.5 s post cue @ 128 Hz
+epoch  = window.T                                  # (22, 256)
+```
 
-- `axis 0` — trials (288 per subject for complete runs)
-- `axis 1` — EEG channels (22)
-- `axis 2` — time samples (1000 @ 250 Hz = 4 s)
-
-This shape is the canonical EEGNet input format: `(batch, channels, time)`.
+- **Window:** 0.5–2.5 s after cue onset → **256 samples** at 128 Hz
+- Trials whose window would extend past signal end are dropped (rare edge case)
 
 ---
 
@@ -74,34 +85,31 @@ This shape is the canonical EEGNet input format: `(batch, channels, time)`.
 
 Written to `data/processed/bci_competition_iv_2a/`:
 
-| File          | Shape             | dtype   | Contents                        |
-|---------------|-------------------|---------|---------------------------------|
-| `A01T_X.npy`  | `(288, 22, 1000)` | float64 | Filtered, epoched EEG           |
-| `A01T_y.npy`  | `(288,)`          | int32   | Class labels (1–4)              |
-| `A01E_X.npy`  | `(288, 22, 1000)` | float64 | Evaluation set                  |
-| `A01E_y.npy`  | `(288,)`          | int32   | Evaluation labels               |
-| ...           | ...               | ...     | (repeated for A02–A09)          |
+| File           | Shape          | dtype   | Contents                              |
+|----------------|----------------|---------|---------------------------------------|
+| `A01T_X.npy`   | `(288, 22, 256)` | float64 | Preprocessed EEG epochs (T session) |
+| `A01T_y.npy`   | `(288,)`       | int32   | Class labels 1–4                     |
+| `A01T_run.npy` | `(288,)`       | int32   | Run index (0-based) per trial        |
+| `A01E_X.npy`   | `(*, 22, 256)` | float64 | Evaluation session epochs            |
+| `A01E_y.npy`   | `(*,)`         | int32   | Evaluation labels                    |
+| `A01E_run.npy` | `(*,)`         | int32   | Run indices for evaluation session   |
+| ...            | ...            | ...     | Repeated for A02–A09                 |
 
-Labels use the 1-indexed convention from the original dataset:
-
-| Label | Class      |
-|-------|------------|
-| 1     | Left Hand  |
-| 2     | Right Hand |
-| 3     | Both Feet  |
-| 4     | Tongue     |
+Labels use 1-indexed convention (raw dataset); `BCIDataLoader` shifts to 0-indexed at load time.
 
 ---
 
 ## Design Decisions
 
-**Why 4–40 Hz?** Motor imagery is reflected primarily in mu (8–13 Hz) and beta (13–30 Hz) rhythms. The 4 Hz lower bound is conservative enough to preserve these bands without including slow cortical potentials. 40 Hz cleanly excludes power-line noise.
+**Why 128 Hz?** Matches the EEGNet paper (Lawhern et al. 2018). Motor imagery bands (mu 8–13 Hz, beta 13–30 Hz) are well below the Nyquist limit of 64 Hz.
 
-**Why 0–4 s window?** The BCI Competition IV 2a protocol presents the motor imagery cue at t=0 and the subject imagines for 4 seconds. This is the full available imagery period and is the standard windowing used in EEGNet literature for this dataset.
+**Why 0.5–2.5 s window?** Follows EEGNet paper. Avoids the visual evoked potential at cue onset and captures the motor imagery period within the 4-second trial.
 
-**Why zero-phase filtering?** `sosfiltfilt` prevents temporal smearing of event-locked responses. Causal filters introduce group delay that would shift the post-cue onset relative to the expected neural response timing.
+**Why causal filter?** Matches EEGNet paper's causal `sosfilt`. Zero-phase filters would leak future information into past samples — inappropriate for online BCI scenarios.
 
-**Why keep artifact-flagged trials?** Artifact labels are preserved in `load_mat` but not used to exclude trials during preprocessing. Downstream training code can choose to mask or weight these trials — keeping them here is less destructive than silently dropping data.
+**Why keep artifact-flagged trials?** Artifact labels are preserved in output but not used to exclude trials. Downstream code can choose to filter or weight them.
+
+**Why save `_run.npy`?** `splits.py` uses run membership to construct blockwise cross-validation folds aligned with the paper's protocol.
 
 ---
 
@@ -111,4 +119,4 @@ Labels use the 1-indexed convention from the original dataset:
 python src/data/preprocess.py
 ```
 
-Loading and processing all 18 files takes approximately 10–20 seconds. Progress is shown per file with a spinner.
+Processes all 18 files with a per-file spinner. Output written to `data/processed/bci_competition_iv_2a/`.

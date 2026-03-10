@@ -1,14 +1,18 @@
 """
 Preprocessing pipeline for BCI Competition IV Dataset 2a.
 
-Loads raw .mat files, applies a Butterworth bandpass filter (4–40 Hz),
-extracts per-trial windows, and saves processed arrays to data/processed/.
+Matches the original EEGNet paper (Lawhern et al. 2018) preprocessing:
+  1. Resample 250 Hz → 128 Hz
+  2. Convert to microvolts (× 1e6)
+  3. Causal Butterworth bandpass 4–38 Hz, order 3
+  4. Exponential running standardization (per electrode, on continuous signal)
+  5. Epoch 0.5–2.5 s post cue → 256 samples
 
 Usage:
     python src/data/preprocess.py
 
 Output per subject/split (e.g. A01T):
-    data/processed/bci_competition_iv_2a/A01T_X.npy  — (n_trials, 22, 1000)
+    data/processed/bci_competition_iv_2a/A01T_X.npy  — (n_trials, 22, 256)
     data/processed/bci_competition_iv_2a/A01T_y.npy  — (n_trials,)
 """
 
@@ -32,14 +36,14 @@ SUBJECTS    = [f"A{i:02d}" for i in range(1, 10)]
 SPLITS      = {"T": "Training", "E": "Evaluation"}
 CLASS_LABELS = {1: "Left Hand", 2: "Right Hand", 3: "Both Feet", 4: "Tongue"}
 
-FS            = 250          # Hz
+FS            = 128          # Hz (resampled from 250 Hz)
 N_EEG         = 22           # first 22 channels are EEG (channels 23-25 are EOG)
 BANDPASS_LOW  = 4.0          # Hz
-BANDPASS_HIGH = 40.0         # Hz
-FILTER_ORDER  = 5
-TRIAL_START   = 0            # seconds after cue onset
-TRIAL_END     = 4.0          # seconds after cue onset  →  1000 samples
-N_TIMEPOINTS  = int((TRIAL_END - TRIAL_START) * FS)   # 1000
+BANDPASS_HIGH = 38.0         # Hz
+FILTER_ORDER  = 3
+TRIAL_START   = 0.5          # seconds after cue onset
+TRIAL_END     = 2.5          # seconds after cue onset  →  256 samples
+N_TIMEPOINTS  = int((TRIAL_END - TRIAL_START) * FS)   # 256
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +78,7 @@ class _Spinner:
 # ---------------------------------------------------------------------------
 
 def bandpass_filter(X: np.ndarray, fs: float) -> np.ndarray:
-    """Zero-phase Butterworth bandpass filter applied to each channel.
+    """Causal Butterworth bandpass filter applied to each channel.
 
     Args:
         X: (n_samples, n_channels) raw EEG signal.
@@ -90,7 +94,35 @@ def bandpass_filter(X: np.ndarray, fs: float) -> np.ndarray:
         fs=fs,
         output="sos",
     )
-    return scipy.signal.sosfiltfilt(sos, X, axis=0)
+    return scipy.signal.sosfilt(sos, X, axis=0)
+
+
+def exp_running_standardize(
+    X: np.ndarray,
+    factor_new: float = 1e-3,
+    init_block_size: int = 1000,
+    eps: float = 1e-4,
+) -> np.ndarray:
+    """Exponential running standardization per channel on a continuous signal.
+
+    Args:
+        X: (n_samples, n_channels) signal.
+        factor_new: smoothing factor for the running mean/var update.
+        init_block_size: number of samples used to initialize mean and variance.
+        eps: small constant added inside sqrt for numerical stability.
+
+    Returns:
+        Standardized array of same shape.
+    """
+    X = X.copy().astype(np.float64)
+    mean = X[:init_block_size].mean(axis=0)
+    var  = X[:init_block_size].var(axis=0)
+    for i in range(len(X)):
+        x = X[i]
+        mean = (1 - factor_new) * mean + factor_new * x
+        var  = (1 - factor_new) * var  + factor_new * (x - mean) ** 2
+        X[i] = (x - mean) / np.sqrt(var + eps)
+    return X
 
 
 def extract_trials(X_filtered: np.ndarray, trial_onsets: np.ndarray) -> np.ndarray:
@@ -127,24 +159,27 @@ def load_mat(filepath: str) -> dict:
     artifact flag per trial. This function concatenates all runs into a single
     continuous signal and adjusts trial onset indices accordingly.
 
-    Returns a dict with keys: X, trial, y, artifacts, fs, gender, age.
+    Returns a dict with keys: X, trial, y, artifacts, run, fs, gender, age.
+    The 'run' array holds the run index (0-based) for each trial.
     """
     mat  = scipy.io.loadmat(filepath, simplify_cells=True)
     runs = mat["data"]
 
-    X_list, trial_list, y_list, art_list = [], [], [], []
+    X_list, trial_list, y_list, art_list, run_list = [], [], [], [], []
     offset = 0
 
-    for run in runs:
+    for run_idx, run in enumerate(runs):
         X         = run["X"]                            # (n_samples, 25)
         trial     = run["trial"].astype(np.int64)       # (n_trials,)
         y         = np.asarray(run["y"]).ravel()
         artifacts = np.asarray(run["artifacts"]).ravel()
+        n         = len(trial)
 
         X_list.append(X)
         trial_list.append(trial + offset)
         y_list.append(y)
         art_list.append(artifacts)
+        run_list.append(np.full(n, run_idx, dtype=np.int32))
         offset += X.shape[0]
 
     first = runs[0]
@@ -153,6 +188,7 @@ def load_mat(filepath: str) -> dict:
         "trial":     np.concatenate(trial_list),
         "y":         np.concatenate(y_list).astype(np.int32),
         "artifacts": np.concatenate(art_list).astype(np.int32),
+        "run":       np.concatenate(run_list),
         "fs":        int(first["fs"]),
         "gender":    first.get("gender", "unknown"),
         "age":       first.get("age",    "unknown"),
@@ -163,30 +199,50 @@ def load_mat(filepath: str) -> dict:
 # Processing & saving
 # ---------------------------------------------------------------------------
 
-def process(mat: dict) -> tuple[np.ndarray, np.ndarray]:
-    """Apply bandpass filter and extract trial windows.
+def process(mat: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Resample, convert to µV, bandpass filter, standardize, and epoch.
+
+    Follows the original EEGNet paper preprocessing pipeline.
 
     Returns:
-        X_epochs: (n_trials, N_EEG, N_TIMEPOINTS)  float64
+        X_epochs: (n_trials, N_EEG, N_TIMEPOINTS)  float64  — shape (n, 22, 256)
         y:        (n_trials,)                       int32
+        run:      (n_trials,)                       int32    — run index per trial
     """
-    X_filt   = bandpass_filter(mat["X"], mat["fs"])   # (n_samples, 25)
-    X_epochs = extract_trials(X_filt, mat["trial"])   # (n_trials, 22, 1000)
+    fs_orig = mat["fs"]   # 250 Hz
 
-    # align labels with any trials dropped by extract_trials
-    n_trials_kept = X_epochs.shape[0]
-    y = mat["y"][:n_trials_kept]
+    # Drop EOG channels on the continuous signal
+    X_raw = mat["X"][:, :N_EEG].astype(np.float64)   # (n_samples, 22)
 
-    return X_epochs, y
+    # Resample 250 Hz → 128 Hz
+    X_rs  = scipy.signal.resample_poly(X_raw, FS, fs_orig, axis=0)
+    trial = np.round(mat["trial"] * FS / fs_orig).astype(np.int64)
+
+    # Convert V → µV
+    X_uv  = X_rs * 1e6
+
+    # Causal bandpass filter
+    X_filt = bandpass_filter(X_uv, FS)
+
+    # Exponential running standardization (on continuous signal)
+    X_norm = exp_running_standardize(X_filt)
+
+    # Epoch 0.5–2.5 s post cue
+    X_epochs = extract_trials(X_norm, trial)   # (n_trials, 22, 256)
+
+    n_kept = X_epochs.shape[0]
+    y   = mat["y"][:n_kept]
+    run = mat["run"][:n_kept]
+
+    return X_epochs, y, run
 
 
-def save(X: np.ndarray, y: np.ndarray, fname_stem: str) -> None:
-    """Save X and y arrays as .npy files under OUT_DIR."""
+def save(X: np.ndarray, y: np.ndarray, run: np.ndarray, fname_stem: str) -> None:
+    """Save X, y, and run arrays as .npy files under OUT_DIR."""
     os.makedirs(OUT_DIR, exist_ok=True)
-    x_path = os.path.join(OUT_DIR, f"{fname_stem}_X.npy")
-    y_path = os.path.join(OUT_DIR, f"{fname_stem}_y.npy")
-    np.save(x_path, X)
-    np.save(y_path, y)
+    np.save(os.path.join(OUT_DIR, f"{fname_stem}_X.npy"), X)
+    np.save(os.path.join(OUT_DIR, f"{fname_stem}_y.npy"), y)
+    np.save(os.path.join(OUT_DIR, f"{fname_stem}_run.npy"), run)
 
 
 # ---------------------------------------------------------------------------
@@ -202,8 +258,8 @@ def summarize(mat: dict, X_epochs: np.ndarray, y: np.ndarray,
     print(f"  {'─' * 46}")
     print(f"  Channels      : {mat['X'].shape[1]} total  ({N_EEG} EEG + {25 - N_EEG} EOG)")
     print(f"  Sampling rate : {mat['fs']} Hz")
-    print(f"  Bandpass      : {BANDPASS_LOW}–{BANDPASS_HIGH} Hz  (order {FILTER_ORDER}, zero-phase)")
-    print(f"  Trial window  : {TRIAL_START}–{TRIAL_END} s  ({N_TIMEPOINTS} samples)")
+    print(f"  Bandpass      : {BANDPASS_LOW}–{BANDPASS_HIGH} Hz  (order {FILTER_ORDER}, causal)")
+    print(f"  Trial window  : {TRIAL_START}–{TRIAL_END} s post cue  ({N_TIMEPOINTS} samples @ {FS} Hz)")
     print(f"  Epochs shape  : {X_epochs.shape}  (trials × channels × time)")
     print(f"  Subject       : {mat['gender']}, age {mat['age']}")
     print(f"  Total trials  : {len(y)}  ({n_artifact} artifact-flagged)")
@@ -236,8 +292,8 @@ def main():
             spinner = _Spinner(f"  Processing {fname}")
             spinner.start()
             mat = load_mat(fpath)
-            X_epochs, y = process(mat)
-            save(X_epochs, y, f"{subject}{suffix}")
+            X_epochs, y, run = process(mat)
+            save(X_epochs, y, run, f"{subject}{suffix}")
             spinner.stop()
 
             summarize(mat, X_epochs, y, subject, split_name)

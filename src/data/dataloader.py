@@ -6,11 +6,11 @@ BCIDataLoader — PyTorch DataLoader for BCI Competition IV Dataset 2a.
 This module wraps the preprocessed .npy files and split config (configs/data_splits.json)
 into a standard PyTorch DataLoader. Two evaluation modes are supported:
 
-  - **subject_dependent**: Train, validate, and test within a single subject using a
-    70/15/15 index split. All data comes from that subject's Training session (A##T).
+  - **subject_dependent**: Train, validate, and test within a single subject using
+    4-fold blockwise CV (first 4 MI runs, runs 3–6). All data from T session.
 
-  - **loso** (Leave-One-Subject-Out): Train on 7 subjects, validate on 1, test on 1.
-    Both Training and Evaluation sessions are concatenated per subject.
+  - **loso** (Leave-One-Subject-Out): 90 folds (9 subjects × 10 random reps).
+    Train on 5 subjects (T), validate on 3 subjects (T), test on 1 subject (E).
 
 ## How It Works
 
@@ -32,13 +32,14 @@ into a standard PyTorch DataLoader. Two evaluation modes are supported:
     loader = BCIDataLoader(
         mode='subject_dependent',
         subject='A01',          # which subject (A01–A09)
+        fold=0,                 # 0–3; blockwise CV fold
         split='train',          # 'train', 'val', or 'test'
         batch_size=32,
         shuffle=True,
     )
 
     for X_batch, y_batch in loader:
-        # X_batch: (batch_size, 22, 1000)  float32
+        # X_batch: (batch_size, 22, 256)  float32
         # y_batch: (batch_size,)            long  (0-indexed: 0=Left, 1=Right, 2=Feet, 3=Tongue)
         ...
 
@@ -46,7 +47,7 @@ into a standard PyTorch DataLoader. Two evaluation modes are supported:
 
     loader = BCIDataLoader(
         mode='loso',
-        fold=0,                 # 0–8; fold N uses subject N as test subject
+        fold_key='A01_rep0',    # '{subject}_rep{0-9}'; or integer 0–89
         split='train',          # 'train', 'val', or 'test'
         batch_size=32,
         shuffle=True,
@@ -141,8 +142,8 @@ class BCIDataLoader:
     """PyTorch DataLoader for BCI Competition IV Dataset 2a.
 
     Supports two modes:
-      - 'subject_dependent': single subject, index-based 70/15/15 split
-      - 'loso': cross-subject, 7 train / 1 val / 1 test subjects
+      - 'subject_dependent': single subject, 4-fold blockwise CV (fold 0–3)
+      - 'loso': cross-subject, 90 folds (5 train / 3 val / 1 test subjects)
 
     See module docstring for full usage examples.
     """
@@ -154,8 +155,9 @@ class BCIDataLoader:
         *,
         # subject_dependent args
         subject: Optional[str] = None,
+        fold: Optional[int] = None,          # 0–3 for subject_dependent
         # loso args
-        fold: Optional[int] = None,
+        fold_key: Optional[str] = None,      # e.g. 'A01_rep3' for loso
         # shared / optional
         data_path: str = _DEFAULT_DATA_PATH,
         split_config: str = _DEFAULT_CONFIG,
@@ -173,9 +175,9 @@ class BCIDataLoader:
             config = json.load(f)
 
         if mode == "subject_dependent":
-            X, y = self._build_subject_dependent(config, data_path, subject, split)
+            X, y = self._build_subject_dependent(config, data_path, subject, fold, split)
         else:
-            X, y = self._build_loso(config, data_path, fold, split)
+            X, y = self._build_loso(config, data_path, fold_key, split)
 
         dataset = BCIDataset(X, y, transform=transform)
         self._loader = DataLoader(
@@ -190,29 +192,32 @@ class BCIDataLoader:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_subject_dependent(config, data_path, subject, split):
+    def _build_subject_dependent(config, data_path, subject, fold, split):
         if subject is None:
             raise ValueError("'subject' is required for mode='subject_dependent'")
+        if fold is None:
+            raise ValueError("'fold' (0–3) is required for mode='subject_dependent'")
 
         subj_cfg = config["subject_dependent"][subject]
-        indices  = subj_cfg[split]           # list of trial indices
+        fold_cfg = subj_cfg[f"fold_{fold}"]
+        indices  = fold_cfg[split]           # list of trial indices
         session  = subj_cfg["session"]       # always 'T'
 
         X, y = _load_npy(data_path, subject, session)
         return X[indices], y[indices]
 
     @staticmethod
-    def _build_loso(config, data_path, fold, split):
-        if fold is None:
-            raise ValueError("'fold' is required for mode='loso'")
+    def _build_loso(config, data_path, fold_key, split):
+        if fold_key is None:
+            raise ValueError("'fold_key' (e.g. 'A01_rep3') is required for mode='loso'")
 
-        fold_cfg = config["loso"][f"fold_{fold}"]
+        fold_cfg = config["loso"][fold_key]
 
         if split == "train":
             subjects = fold_cfg["train_subjects"]
             sessions = fold_cfg["train_sessions"]
         elif split == "val":
-            subjects = [fold_cfg["val_subject"]]
+            subjects = fold_cfg["val_subjects"]
             sessions = fold_cfg["val_sessions"]
         else:  # test
             subjects = [fold_cfg["test_subject"]]
