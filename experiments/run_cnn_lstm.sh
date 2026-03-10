@@ -27,8 +27,9 @@ for SUBJECT in A01 A02 A03 A04 A05 A06 A07 A08 A09; do
         --mode subject_dependent \
         --subject $SUBJECT \
         --epochs 100 \
-        --lr 0.001 \
+        --lr 0.0001 \
         --batch_size 32 \
+        --weight_decay 0.001 \
         2>&1 | tee $LOG_DIR/${MODEL}_${SUBJECT}_subject_dependent.log
 done
 
@@ -46,8 +47,9 @@ for FOLD in 0 1 2 3 4 5 6 7 8; do
         --mode loso \
         --fold $FOLD \
         --epochs 100 \
-        --lr 0.001 \
+        --lr 0.0001 \
         --batch_size 32 \
+        --weight_decay 0.001 \
         2>&1 | tee $LOG_DIR/${MODEL}_fold${FOLD}_loso.log
 done
 
