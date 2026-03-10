@@ -165,6 +165,10 @@ def train(
     }
 
     best_val_acc = 0.0
+    best_val_loss = float('inf')
+    patience = 15
+    epochs_no_improve = 0
+
     os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
     os.makedirs(os.path.dirname(results_path), exist_ok=True)
 
@@ -193,6 +197,16 @@ def train(
             best_val_acc = val_acc
             torch.save(model.state_dict(), checkpoint_path)
             print(f"         ✓ Saved checkpoint (val_acc={val_acc:.2%})")
+        
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print(f"\nEarly stopping at epoch {epoch} — val loss hasn't improved for {patience} epochs")
+                break
+
 
     history["best_val_acc"] = best_val_acc
     print(f"\nBest val acc: {best_val_acc:.2%}")
