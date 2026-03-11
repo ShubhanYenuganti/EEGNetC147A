@@ -1,27 +1,30 @@
 """
 Run all CNN+GRU training and evaluation experiments (final R3 config).
-
-Hyperparameters (from 3-round grid search):
-  lr=0.001, wd=5e-4, epochs=300
-  gru_hidden=48, gru_layers=2
-  cnn_dropout=0.4, fc_dropout=0.5
-  batch_size=16
-
-Winner config achieved 64.34% mean val across A02/A03/A07.
-
-Usage:
-    python run_cnn_gru.py
 """
 
+import json
 import subprocess
 
 SUBJECTS = [f"A0{i}" for i in range(1, 10)]
 
-# ── Tuned hyperparameters (R3 winner) ────────────────────────────────────
-LR           = "0.001"
+LR = "0.001"
 WEIGHT_DECAY = "5e-4"
-EPOCHS       = "300"
-BATCH_SIZE   = "16"
+EPOCHS = "300"
+BATCH_SIZE = "16"
+
+
+def load_loso_fold_keys(path="configs/data_splits.json"):
+    with open(path, "r") as f:
+        splits = json.load(f)
+
+    # Adjust this if your JSON structure is slightly different
+    if "loso" in splits:
+        loso_obj = splits["loso"]
+        if isinstance(loso_obj, dict):
+            return list(loso_obj.keys())
+
+    raise ValueError("Could not find LOSO fold keys in configs/data_splits.json")
+
 
 # ── Subject-dependent training ───────────────────────────────────────────
 print("=" * 60)
@@ -30,17 +33,20 @@ print(f" lr={LR}  wd={WEIGHT_DECAY}  epochs={EPOCHS}  bs={BATCH_SIZE}")
 print("=" * 60)
 
 for subj in SUBJECTS:
-    print(f"\n>>> Training subject {subj}...")
-    subprocess.run([
-        "python", "-m", "src.train",
-        "--model", "cnn_gru",
-        "--mode", "subject_dependent",
-        "--subject", subj,
-        "--epochs", EPOCHS,
-        "--lr", LR,
-        "--weight_decay", WEIGHT_DECAY,
-        "--batch_size", BATCH_SIZE,
-    ])
+    for fold in range(4):
+        print(f"\n>>> Training subject {subj}, fold {fold}...")
+        subprocess.run([
+            "python", "-m", "src.train",
+            "--model", "cnn_gru",
+            "--mode", "subject_dependent",
+            "--subject", subj,
+            "--fold", str(fold),
+            "--epochs", EPOCHS,
+            "--lr", LR,
+            "--weight_decay", WEIGHT_DECAY,
+            "--batch_size", BATCH_SIZE,
+        ])
+
 
 # ── LOSO training ────────────────────────────────────────────────────────
 print("=" * 60)
@@ -48,18 +54,21 @@ print(" CNN+GRU (final R3): LOSO Training")
 print(f" lr={LR}  wd={WEIGHT_DECAY}  epochs={EPOCHS}  bs={BATCH_SIZE}")
 print("=" * 60)
 
-for fold in range(9):
-    print(f"\n>>> Training LOSO fold {fold}...")
+loso_fold_keys = load_loso_fold_keys()
+
+for fold_key in loso_fold_keys:
+    print(f"\n>>> Training LOSO fold {fold_key}...")
     subprocess.run([
         "python", "-m", "src.train",
         "--model", "cnn_gru",
         "--mode", "loso",
-        "--fold", str(fold),
+        "--fold_key", fold_key,
         "--epochs", EPOCHS,
         "--lr", LR,
         "--weight_decay", WEIGHT_DECAY,
         "--batch_size", BATCH_SIZE,
     ])
+
 
 # ── Evaluation ───────────────────────────────────────────────────────────
 print("=" * 60)

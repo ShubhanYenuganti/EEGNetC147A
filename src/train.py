@@ -3,13 +3,13 @@ Training script for MindReader EEG Motor Imagery Classification.
 
 Usage:
     # Subject-dependent
-    python -m src.train --model eegnet --mode subject_dependent --subject A01
+    python -m src.train --model eegnet --mode subject_dependent --subject A01 --fold 0
 
     # LOSO
-    python -m src.train --model cnn_lstm --mode loso --fold 0
+    python -m src.train --model cnn_lstm --mode loso --fold_key A01_rep0
 
     # With custom hyperparams
-    python -m src.train --model tcn --mode subject_dependent --subject A01 --epochs 150 --lr 0.0005 --batch_size 64
+    python -m src.train --model tcn --mode subject_dependent --subject A01 --fold 0 --epochs 150 --lr 0.0005 --batch_size 64
 """
 
 import argparse
@@ -21,6 +21,7 @@ import torch
 import torch.nn as nn
 
 from src.data.dataloader import BCIDataLoader
+
 
 # ---------------------------------------------------------------------------
 # Model registry — add new models here as they're implemented
@@ -48,11 +49,13 @@ def get_model(model_name: str, n_channels: int = 22, n_classes: int = 4) -> nn.M
     elif model_name == "dummy":
         from src.models.dummy import Dummy
         return Dummy(n_channels=n_channels, n_classes=n_classes)
-
     else:
-        raise ValueError(f"Unknown model: {model_name}. "
-                         f"Options: eegnet, cnn_lstm, tcn, lstm, cnn_gru, transformer")
-    
+        raise ValueError(
+            f"Unknown model: {model_name}. "
+            f"Options: eegnet, cnn_lstm, tcn, lstm, cnn_gru, transformer, dummy"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Training and validation loops
 # ---------------------------------------------------------------------------
@@ -64,13 +67,8 @@ def train_one_epoch(
     criterion: nn.Module,
     device: torch.device,
 ) -> tuple[float, float]:
-    """One full pass over the training data.
-    
-    Returns:
-        avg_loss: average cross-entropy loss over all batches
-        accuracy: fraction of correctly classified trials
-    """
-    
+    """One full pass over the training data."""
+
     model.train()
     total_loss = 0.0
     correct = 0
@@ -90,8 +88,9 @@ def train_one_epoch(
         preds = logits.argmax(dim=1)
         correct += (preds == y_batch).sum().item()
         total += len(y_batch)
-    
-    return total_loss/total, correct/total
+
+    return total_loss / total, correct / total
+
 
 def validate(
     model: nn.Module,
@@ -99,12 +98,7 @@ def validate(
     criterion: nn.Module,
     device: torch.device,
 ) -> tuple[float, float]:
-    """One full pass over val/test data with no gradient updates.
-
-    Returns:
-        avg_loss: average cross-entropy loss
-        accuracy: fraction of correctly classified trials
-    """
+    """One full pass over val/test data with no gradient updates."""
 
     model.eval()
     total_loss = 0.0
@@ -123,8 +117,8 @@ def validate(
             preds = logits.argmax(dim=1)
             correct += (preds == y_batch).sum().item()
             total += len(y_batch)
-    
-    return total_loss/total, correct/total
+
+    return total_loss / total, correct / total
 
 
 # ---------------------------------------------------------------------------
@@ -139,48 +133,50 @@ def train(
     checkpoint_path: str,
     results_path: str,
 ) -> dict:
-    """Full training run.
-
-    Trains for config['epochs'] epochs, saves the best model by val accuracy,
-    and writes per-epoch metrics to a JSON file.
-
-    Returns:
-        history: dict with lists of train/val loss and accuracy per epoch
-    """
+    """Full training run."""
 
     device = config["device"]
     model = model.to(device)
-    
-    optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"],
-                                 weight_decay=config.get("weight_decay", 1e-4))
+
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=config["lr"],
+        weight_decay=config.get("weight_decay", 1e-4),
+    )
     criterion = nn.CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="max", patience=10, factor=0.5
     )
 
     history = {
-        "train_loss": [], "train_acc": [],
-        "val_loss": [], "val_acc": [],
+        "train_loss": [],
+        "train_acc": [],
+        "val_loss": [],
+        "val_acc": [],
         "config": config,
     }
 
     best_val_acc = 0.0
-    best_val_loss = float('inf')
+    best_val_loss = float("inf")
     patience = 15
     epochs_no_improve = 0
 
     os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
     os.makedirs(os.path.dirname(results_path), exist_ok=True)
 
-    print(f"\n{'Epoch':>6}  {'Train Loss':>10}  {'Train Acc':>9}  "
-          f"{'Val Loss':>8}  {'Val Acc':>7}  {'Time':>6}")
+    print(
+        f"\n{'Epoch':>6}  {'Train Loss':>10}  {'Train Acc':>9}  "
+        f"{'Val Loss':>8}  {'Val Acc':>7}  {'Time':>6}"
+    )
     print("-" * 60)
-    
+
     for epoch in range(1, config["epochs"] + 1):
         t0 = time.time()
 
-        train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device)
-        val_loss, val_acc     = validate(model, val_loader, criterion, device)
+        train_loss, train_acc = train_one_epoch(
+            model, train_loader, optimizer, criterion, device
+        )
+        val_loss, val_acc = validate(model, val_loader, criterion, device)
 
         scheduler.step(val_acc)
 
@@ -190,37 +186,42 @@ def train(
         history["val_acc"].append(val_acc)
 
         elapsed = time.time() - t0
-        print(f"{epoch:>6}  {train_loss:>10.4f}  {train_acc:>8.2%}  "
-              f"{val_loss:>8.4f}  {val_acc:>6.2%}  {elapsed:>5.1f}s")
+        print(
+            f"{epoch:>6}  {train_loss:>10.4f}  {train_acc:>8.2%}  "
+            f"{val_loss:>8.4f}  {val_acc:>6.2%}  {elapsed:>5.1f}s"
+        )
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             torch.save(model.state_dict(), checkpoint_path)
             print(f"         ✓ Saved checkpoint (val_acc={val_acc:.2%})")
-        
+
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             epochs_no_improve = 0
         else:
             epochs_no_improve += 1
             if epochs_no_improve >= patience:
-                print(f"\nEarly stopping at epoch {epoch} — val loss hasn't improved for {patience} epochs")
+                print(
+                    f"\nEarly stopping at epoch {epoch} — "
+                    f"val loss hasn't improved for {patience} epochs"
+                )
                 break
-
 
     history["best_val_acc"] = best_val_acc
     print(f"\nBest val acc: {best_val_acc:.2%}")
     print(f"Checkpoint:   {checkpoint_path}")
-    history["config"] = {k: str(v) if isinstance(v, torch.device) else v 
-                     for k, v in config.items()}
+
+    history["config"] = {
+        k: str(v) if isinstance(v, torch.device) else v
+        for k, v in config.items()
+    }
 
     with open(results_path, "w") as f:
         json.dump(history, f, indent=2)
     print(f"Results:      {results_path}\n")
 
     return history
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -231,23 +232,45 @@ def main():
     parser = argparse.ArgumentParser(description="Train a model on BCI Competition IV 2a")
 
     # Model and mode
-    parser.add_argument("--model",   type=str, required=True,
-                        choices=["dummy","eegnet", "cnn_lstm", "tcn", "lstm", "cnn_gru", "transformer"])
-    parser.add_argument("--mode",    type=str, required=True,
-                        choices=["subject_dependent", "loso"])
+    parser.add_argument(
+        "--model",
+        type=str,
+        required=True,
+        choices=["dummy", "eegnet", "cnn_lstm", "tcn", "lstm", "cnn_gru", "transformer"],
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        required=True,
+        choices=["subject_dependent", "loso"],
+    )
 
     # Subject-dependent args
-    parser.add_argument("--subject", type=str, default=None,
-                        help="Subject ID for subject_dependent mode (e.g. A01)")
+    parser.add_argument(
+        "--subject",
+        type=str,
+        default=None,
+        help="Subject ID for subject_dependent mode (e.g. A01)",
+    )
+    parser.add_argument(
+        "--fold",
+        type=int,
+        default=None,
+        help="Fold index for subject_dependent mode (0-3)",
+    )
 
     # LOSO args
-    parser.add_argument("--fold",    type=int, default=None,
-                        help="Fold index for loso mode (0-8)")
+    parser.add_argument(
+        "--fold_key",
+        type=str,
+        default=None,
+        help="LOSO split key (e.g. A01_rep0)",
+    )
 
     # Hyperparameters
-    parser.add_argument("--epochs",     type=int,   default=100)
-    parser.add_argument("--lr",         type=float, default=0.001)
-    parser.add_argument("--batch_size", type=int,   default=32)
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
 
     # Misc
@@ -256,10 +279,21 @@ def main():
     args = parser.parse_args()
 
     # Validate args
-    if args.mode == "subject_dependent" and args.subject is None:
-        parser.error("--subject is required for subject_dependent mode")
-    if args.mode == "loso" and args.fold is None:
-        parser.error("--fold is required for loso mode")
+    if args.mode == "subject_dependent":
+        if args.subject is None:
+            parser.error("--subject is required for subject_dependent mode")
+        if args.fold is None:
+            parser.error("--fold is required for subject_dependent mode")
+        if not (0 <= args.fold <= 3):
+            parser.error("--fold must be in [0, 1, 2, 3] for subject_dependent mode")
+
+    if args.mode == "loso":
+        if args.fold_key is None:
+            parser.error("--fold_key is required for loso mode")
+        if args.subject is not None:
+            parser.error("--subject should not be used with loso mode")
+        if args.fold is not None:
+            parser.error("--fold should not be used with loso mode; use --fold_key instead")
 
     # Device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -272,9 +306,11 @@ def main():
         num_workers=args.num_workers,
         subject=args.subject,
         fold=args.fold,
+        fold_key=args.fold_key,
     )
+
     train_loader = BCIDataLoader(**loader_kwargs, split="train", shuffle=True)
-    val_loader   = BCIDataLoader(**loader_kwargs, split="val",   shuffle=False)
+    val_loader = BCIDataLoader(**loader_kwargs, split="val", shuffle=False)
 
     print(f"Train batches: {len(train_loader)} | Val batches: {len(val_loader)}")
 
@@ -285,24 +321,25 @@ def main():
 
     # Build output paths
     if args.mode == "subject_dependent":
-        run_id = f"{args.model}_{args.subject}_subject_dependent"
+        run_id = f"{args.model}_{args.subject}_fold{args.fold}_subject_dependent"
     else:
-        run_id = f"{args.model}_fold{args.fold}_loso"
+        run_id = f"{args.model}_{args.fold_key}_loso"
 
     checkpoint_path = os.path.join("experiments", "checkpoints", f"{run_id}_best.pt")
-    results_path    = os.path.join("experiments", "results",      f"{run_id}.json")
+    results_path = os.path.join("experiments", "results", f"{run_id}.json")
 
     # Config dict passed through to train()
     config = {
-        "model":        args.model,
-        "mode":         args.mode,
-        "subject":      args.subject,
-        "fold":         args.fold,
-        "epochs":       args.epochs,
-        "lr":           args.lr,
-        "batch_size":   args.batch_size,
+        "model": args.model,
+        "mode": args.mode,
+        "subject": args.subject,
+        "fold": args.fold,
+        "fold_key": args.fold_key,
+        "epochs": args.epochs,
+        "lr": args.lr,
+        "batch_size": args.batch_size,
         "weight_decay": args.weight_decay,
-        "device":       device,
+        "device": device,
     }
 
     train(model, train_loader, val_loader, config, checkpoint_path, results_path)

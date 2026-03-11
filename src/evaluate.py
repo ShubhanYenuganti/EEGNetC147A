@@ -13,65 +13,47 @@ import argparse
 import json
 import os
 
-import torch
 import numpy as np
+import torch
 
 from src.data.dataloader import BCIDataLoader
 from src.train import get_model
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
 SUBJECTS = [f"A{i:02d}" for i in range(1, 10)]
-N_FOLDS  = 9
+SUBJECT_DEP_FOLDS = [0, 1, 2, 3]
+_SPLIT_CONFIG = os.path.join("configs", "data_splits.json")
 
-# ---------------------------------------------------------------------------
-# Load model - from train.py
-# ---------------------------------------------------------------------------
+
+def load_loso_fold_keys(split_config_path: str = _SPLIT_CONFIG) -> list[str]:
+    with open(split_config_path, "r") as f:
+        cfg = json.load(f)
+
+    if "loso" not in cfg or not isinstance(cfg["loso"], dict):
+        raise ValueError("configs/data_splits.json does not contain a valid 'loso' section")
+
+    return list(cfg["loso"].keys())
+
 
 def load_model(model_name: str, checkpoint_path: str, device: torch.device) -> torch.nn.Module:
-    """Instantiate model architecture and load saved weights from checkpoint.
-
-    Args:
-        model_name:      name of the architecture (must match get_model registry)
-        checkpoint_path: path to the .pt file saved by train.py
-        device:          device to load the model onto
-
-    Returns:
-        model in eval mode with loaded weights
-    """
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(
             f"No checkpoint found at {checkpoint_path}. "
-            f"Run train.py first for this model/subject/fold."
+            f"Run train.py first for this model/split."
         )
+
     model = get_model(model_name)
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.to(device)
     model.eval()
     return model
 
-# ---------------------------------------------------------------------------
-# Training and validation loops
-# ---------------------------------------------------------------------------
 
 def evaluate_one(
     model: torch.nn.Module,
     loader: BCIDataLoader,
     device: torch.device,
 ) -> float:
-    """One full pass on a single dataloader.
-    
-    Args:
-        model:  trained model in eval mode
-        loader: dataloader for the split to evaluate on
-        device: device to run inference on
-
-    Returns:
-        accuracy as a float between 0 and 1
-
-    """
     correct = 0
     total = 0
 
@@ -81,128 +63,119 @@ def evaluate_one(
             y_batch = y_batch.long().to(device)
 
             logits = model(X_batch)
-
             preds = logits.argmax(dim=1)
+
             correct += (preds == y_batch).sum().item()
             total += len(y_batch)
-    
-    return correct/total
 
-# ---------------------------------------------------------------------------
-# Subject-dependent evaluation
-# ---------------------------------------------------------------------------
+    return correct / total
+
 
 def evaluate_subject_dependent(model_name: str, device: torch.device) -> dict:
-    """Evaluate model on test split for all 9 subjects independently.
-
-    For each subject, loads the checkpoint saved by train.py and runs
-    inference on that subject's held-out test split.
-
-    Returns:
-        dict with per-subject accuracies, mean, and std
-    """
     results = {}
+    fold_accs = []
 
     print(f"\nSubject-dependent evaluation: {model_name}")
-    print(f"{'Subject':>9}  {'Test Acc':>8}")
-    print("-" * 22)
+    print(f"{'Subject':>9}  {'Fold':>4}  {'Test Acc':>8}")
+    print("-" * 30)
 
     for subject in SUBJECTS:
-        checkpoint_path = os.path.join(
-            "experiments", "checkpoints",
-            f"{model_name}_{subject}_subject_dependent_best.pt"
-        )
+        subject_fold_accs = []
 
-        try:
-            model = load_model(model_name, checkpoint_path, device)
-        except FileNotFoundError as e:
-            print(f"{subject:>9}  MISSING CHECKPOINT")
-            print(f"           {e}")
-            continue
+        for fold in SUBJECT_DEP_FOLDS:
+            checkpoint_path = os.path.join(
+                "experiments",
+                "checkpoints",
+                f"{model_name}_{subject}_fold{fold}_subject_dependent_best.pt",
+            )
 
-        test_loader = BCIDataLoader(
-            mode="subject_dependent",
-            subject=subject,
-            split="test",
-            batch_size=64,
-            shuffle=False,
-        )
+            try:
+                model = load_model(model_name, checkpoint_path, device)
+            except FileNotFoundError as e:
+                print(f"{subject:>9}  {fold:>4}  MISSING")
+                print(f"                {e}")
+                continue
 
-        acc = evaluate_one(model, test_loader, device)
-        results[subject] = acc
-        print(f"{subject:>9} {acc:>7.2%}")
-    
-    if results:
-        accs = list(results.values())
-        results["mean"] = float(np.mean(accs))
-        results["stds"] = float(np.std(accs))
-        print("-" * 22)
-        print(f"{'Mean':>9} {results['mean']:>7.2%}")
-        print(f"{'Std':>9} {results['mean']:>7.2%}")
-    
+            test_loader = BCIDataLoader(
+                mode="subject_dependent",
+                subject=subject,
+                fold=fold,
+                split="test",
+                batch_size=64,
+                shuffle=False,
+            )
+
+            acc = evaluate_one(model, test_loader, device)
+            results[f"{subject}_fold{fold}"] = acc
+            subject_fold_accs.append(acc)
+            fold_accs.append(acc)
+
+            print(f"{subject:>9}  {fold:>4}  {acc:>7.2%}")
+
+        if subject_fold_accs:
+            results[f"{subject}_mean"] = float(np.mean(subject_fold_accs))
+            results[f"{subject}_std"] = float(np.std(subject_fold_accs))
+
+    if fold_accs:
+        results["mean"] = float(np.mean(fold_accs))
+        results["std"] = float(np.std(fold_accs))
+        print("-" * 30)
+        print(f"{'Overall':>9}  {'-':>4}  {results['mean']:>7.2%}")
+        print(f"{'Std':>9}  {'-':>4}  {results['std']:>7.2%}")
+
     return results
 
-# ---------------------------------------------------------------------------
-# LOSO evaluation
-# ---------------------------------------------------------------------------
 
 def evaluate_loso(model_name: str, device: torch.device) -> dict:
-    """Evaluate model on test split for all 9 LOSO folds.
-
-    For each fold, loads the checkpoint saved by train.py and runs
-    inference on that fold's held-out test subject.
-
-    Returns:
-        dict with per-fold accuracies, mean, and std
-    """
     results = {}
+    loso_fold_keys = load_loso_fold_keys()
 
-    print(f"\LOSO evaluation: {model_name}")
-    print(f"{'Fold':>6}  {'Test Acc':>8}")
-    print("-" * 18)
+    print(f"\nLOSO evaluation: {model_name}")
+    print(f"{'Fold Key':>12}  {'Test Acc':>8}")
+    print("-" * 24)
 
-    for fold in range(N_FOLDS):
+    accs = []
+
+    for fold_key in loso_fold_keys:
         checkpoint_path = os.path.join(
-            "experiments", "checkpoints",
-            f"{model_name}_fold{fold}_loso_best.pt"
+            "experiments",
+            "checkpoints",
+            f"{model_name}_{fold_key}_loso_best.pt",
         )
 
         try:
             model = load_model(model_name, checkpoint_path, device)
         except FileNotFoundError as e:
-            print(f"{fold:>6}  MISSING CHECKPOINT")
-            print(f"           {e}")
+            print(f"{fold_key:>12}  MISSING")
+            print(f"              {e}")
             continue
 
         test_loader = BCIDataLoader(
             mode="loso",
-            fold=fold,
+            fold_key=fold_key,
             split="test",
             batch_size=64,
             shuffle=False,
         )
 
         acc = evaluate_one(model, test_loader, device)
-        results[f"fold_{fold}"] = acc
-        print(f"{fold:>6} {acc:>7.2%}")
-    
-    if results:
-        accs = list(results.values())
+        results[fold_key] = acc
+        accs.append(acc)
+
+        print(f"{fold_key:>12}  {acc:>7.2%}")
+
+    if accs:
         results["mean"] = float(np.mean(accs))
-        results["stds"] = float(np.std(accs))
-        print("-" * 22)
-        print(f"{'Mean':>9} {results['mean']:>7.2%}")
-        print(f"{'Std':>9} {results['mean']:>7.2%}")
-    
+        results["std"] = float(np.std(accs))
+        print("-" * 24)
+        print(f"{'Mean':>12}  {results['mean']:>7.2%}")
+        print(f"{'Std':>12}  {results['std']:>7.2%}")
+
     return results
 
-# ---------------------------------------------------------------------------
-# Results saving
-# ---------------------------------------------------------------------------
 
 def save_results(results: dict, model_name: str, mode: str) -> None:
-    """Save evaluation results to JSON."""
-    out_dir  = os.path.join("experiments", "results")
+    out_dir = os.path.join("experiments", "results")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"{model_name}_{mode}_eval.json")
 
@@ -212,22 +185,24 @@ def save_results(results: dict, model_name: str, mode: str) -> None:
     print(f"\nResults saved to: {out_path}")
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
 def main():
-    parser = argparse.ArgumentParser(description="Train a model on BCI Competition IV 2a")
+    parser = argparse.ArgumentParser(description="Evaluate a model on BCI Competition IV 2a")
 
-    # Model and mode
-    parser.add_argument("--model",   type=str, required=True,
-                        choices=["dummy","eegnet", "cnn_lstm", "tcn", "lstm", "cnn_gru", "transformer"])
-    parser.add_argument("--mode",    type=str, required=True,
-                        choices=["subject_dependent", "loso"])
+    parser.add_argument(
+        "--model",
+        type=str,
+        required=True,
+        choices=["dummy", "eegnet", "cnn_lstm", "tcn", "lstm", "cnn_gru", "transformer"],
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        required=True,
+        choices=["subject_dependent", "loso"],
+    )
 
     args = parser.parse_args()
 
-    # Device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
