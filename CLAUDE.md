@@ -24,36 +24,18 @@ python src/data/splits.py       # Generate configs/data_splits.json
 # Subject-dependent (single subject)
 python -m src.train --model alternative_eegnet_250 --mode subject_dependent --subject A01 --epochs 300 --lr 0.001
 
-# LOSO — single fold (fold key is a string like A01_rep0; format: {subject}_rep{0-9})
+# LOSO — single fold (fold key format: {subject}_rep{0-9}, e.g. A01_rep0)
 python -m src.train --model alternative_eegnet_250 --mode loso --fold A01_rep0 --epochs 300 --lr 0.001
 
-# LOSO — all 90 folds (alternative_eegnet_250)
-python -c "
-import json, subprocess
-with open('configs/data_splits_TE.json') as f:
-    config = json.load(f)
-for fold_key in config['loso']:
-    subprocess.run(['python', '-m', 'src.train', '--model', 'alternative_eegnet_250', '--mode', 'loso', '--fold', fold_key, '--epochs', '300', '--lr', '0.001'])
-"
+# Subject-dependent — all 9 subjects for any model
+python run_subject_dependent.py --model alternative_eegnet_250 --epochs 300 --lr 0.001
+python run_subject_dependent.py --model cnn_gru --epochs 300 --lr 0.001 --weight_decay 5e-4 --batch_size 16
 
-# All experiments: subject-dependent (9 subjects) + LOSO (90 folds) for alternative_eegnet_250
-python run_alternative_eegnet_250_experiments.py
-
-# LOSO (cnn_gru, single fold)
-python -m src.train --model cnn_gru --mode loso --fold A01_rep0 --epochs 300
-
-# LOSO — all 90 folds (cnn_gru)
-python -c "
-import json, subprocess
-with open('configs/data_splits_TE.json') as f:
-    config = json.load(f)
-for fold_key in config['loso']:
-    subprocess.run(['python', '-m', 'src.train', '--model', 'cnn_gru', '--mode', 'loso', '--fold', fold_key, '--epochs', '300'])
-"
-
-# Batch experiment scripts
-python run_eegnet_experiments.py
-python run_cnngru_experiments.py
+# LOSO — 4 reps per subject (36 folds) with ETA timer, for any model
+python run_loso.py --model alternative_eegnet_250 --epochs 300 --lr 0.001
+python run_loso.py --model cnn_gru --epochs 300 --lr 0.001 --weight_decay 5e-4 --batch_size 16
+# Override reps (e.g. 1 rep = 9 folds for fastest run):
+python run_loso.py --model cnn_gru --reps 1 --epochs 300
 ```
 
 **Evaluation:**
@@ -73,7 +55,7 @@ python -m src.evaluate --model cnn_gru --mode loso
 2. `src/data/preprocess.py`: Load → ×1e6 → zero-phase Butterworth 4–40 Hz → epoch 2–6 s after cue → `(n, 22, 1000)` `.npy` files. **No resampling — native 250 Hz retained.** Also saves `_run.npy` (run index per trial).
 3. `src/data/splits.py`: Generates `configs/data_splits_TE.json`:
    - **Subject-dependent**: T session for train/val (index-based 70/15 split), E session for test.
-   - **LOSO**: 90 folds (9 test subjects × 10 random reps, keys like `A01_rep0`). Per fold: 5 train subjects (T session) / 3 val subjects (T session) / 1 test subject (E session only).
+   - **LOSO**: 36 folds (9 test subjects × 4 random reps, keys like `A01_rep0`). Per fold: 5 train subjects (T session) / 3 val subjects (T session) / 1 test subject (E session only).
 4. `src/data/dataloader.py`: `BCIDataLoader` wraps `.npy` files with split config, shifts labels 1→0 indexed. Provides `Normalizer` (fit on train, apply to val/test) and `TrialNormalizer` (per-trial z-score, no fitting needed).
 
 ### Training Framework
@@ -90,7 +72,7 @@ python -m src.evaluate --model cnn_gru --mode loso
 
 ### Evaluation Modes
 - **Subject-dependent**: T session for train/val, E session for test. `BCIDataLoader` takes `subject` (e.g. `'A01'`).
-- **LOSO**: 90 folds (integer `fold` index, resolved via `configs/data_splits_TE.json` key `fold_{n}`). Test always uses E session; train/val always use T sessions.
+- **LOSO**: 36 folds (string `fold` key like `A01_rep0`, resolved via `configs/data_splits_TE.json`). Test always uses E session; train/val always use T sessions.
 
 ### Key Constants
 - 22 EEG channels, **250 Hz (native, no resampling)**, 4-second MI windows → shape `(n_trials, 22, 1000)`

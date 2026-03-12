@@ -12,7 +12,7 @@ Random 70/30 train/val split of the T session (seeded per subject).
 Test always uses the E session.
 
 ## LOSO
-90 folds: 9 test subjects × 10 random repetitions.
+36 folds: 9 test subjects × 4 random repetitions.
 Per fold: 5 train subjects (T session), 3 val subjects (T session), 1 test subject (E session).
 """
 
@@ -57,12 +57,12 @@ def create_subject_dependent_splits():
 
 
 def create_loso_splits():
-    """90 folds: 9 test subjects × 10 random repetitions (5 train / 3 val / 1 test)."""
+    """36 folds: 9 test subjects × 4 random repetitions (5 train / 3 val / 1 test)."""
     splits = {}
     rng = np.random.RandomState(42)
     for test_subject in SUBJECTS:
         others = [s for s in SUBJECTS if s != test_subject]
-        for rep in range(10):
+        for rep in range(4):
             perm = rng.permutation(8)
             train_subjects = [others[i] for i in perm[:5]]
             val_subjects   = [others[i] for i in perm[5:]]
@@ -96,6 +96,7 @@ def main():
     print(f"  Subject-dependent: {len(sd)} subjects (T train/val, E test)")
     for subj, split in sd.items():
         print(f"    {subj}: train={len(split['train'])}, val={len(split['val'])}, test_session=E")
+    print(f"  LOSO: {len(loso)} folds (9 subjects × 4 reps, T train/val, E test)")
     print(f"  Saved to: {os.path.normpath(out_path)}")
 
 
