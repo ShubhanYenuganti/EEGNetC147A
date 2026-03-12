@@ -24,8 +24,32 @@ python src/data/splits.py       # Generate configs/data_splits.json
 # Subject-dependent (single subject)
 python -m src.train --model alternative_eegnet_250 --mode subject_dependent --subject A01 --epochs 300 --lr 0.001
 
-# LOSO (leave-one-subject-out, fold is integer index into data_splits_TE.json)
-python -m src.train --model cnn_gru --mode loso --fold 0 --epochs 300
+# LOSO — single fold (fold key is a string like A01_rep0; format: {subject}_rep{0-9})
+python -m src.train --model alternative_eegnet_250 --mode loso --fold A01_rep0 --epochs 300 --lr 0.001
+
+# LOSO — all 90 folds (alternative_eegnet_250)
+python -c "
+import json, subprocess
+with open('configs/data_splits_TE.json') as f:
+    config = json.load(f)
+for fold_key in config['loso']:
+    subprocess.run(['python', '-m', 'src.train', '--model', 'alternative_eegnet_250', '--mode', 'loso', '--fold', fold_key, '--epochs', '300', '--lr', '0.001'])
+"
+
+# All experiments: subject-dependent (9 subjects) + LOSO (90 folds) for alternative_eegnet_250
+python run_alternative_eegnet_250_experiments.py
+
+# LOSO (cnn_gru, single fold)
+python -m src.train --model cnn_gru --mode loso --fold A01_rep0 --epochs 300
+
+# LOSO — all 90 folds (cnn_gru)
+python -c "
+import json, subprocess
+with open('configs/data_splits_TE.json') as f:
+    config = json.load(f)
+for fold_key in config['loso']:
+    subprocess.run(['python', '-m', 'src.train', '--model', 'cnn_gru', '--mode', 'loso', '--fold', fold_key, '--epochs', '300'])
+"
 
 # Batch experiment scripts
 python run_eegnet_experiments.py
@@ -34,7 +58,11 @@ python run_cnngru_experiments.py
 
 **Evaluation:**
 ```bash
+# Subject-dependent
 python -m src.evaluate --model alternative_eegnet_250 --mode subject_dependent
+
+# LOSO — all folds (aggregates mean ± std across folds)
+python -m src.evaluate --model alternative_eegnet_250 --mode loso
 python -m src.evaluate --model cnn_gru --mode loso
 ```
 
