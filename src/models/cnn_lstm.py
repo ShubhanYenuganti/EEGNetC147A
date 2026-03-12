@@ -146,8 +146,8 @@ class CNNLSTM(nn.Module):
         x = x.permute(0, 2, 1)     # (batch, 250, F2)
 
         # LSTM: take only the last timestep's output
-        x, _ = self.lstm(x)         # (batch, 250, lstm_hidden)
-        x = x[:, -1, :]            # (batch, lstm_hidden)
+        x, _ = self.lstm(x)
+        x = x.mean(dim=1)
 
         return self.classifier(x)
 

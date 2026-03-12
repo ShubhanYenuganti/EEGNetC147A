@@ -25,6 +25,18 @@ from src.data.dataloader import BCIDataLoader, Normalizer, TrialNormalizer
 # ---------------------------------------------------------------------------
 # Model registry — add new models here as they're implemented
 # ---------------------------------------------------------------------------
+def sliding_window_augment(
+    X: torch.Tensor,
+    y: torch.Tensor,
+    window: int = 1000,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Random crop — preserves input size so models need no changes."""
+    max_start = X.shape[-1] - window
+    if max_start == 0:
+        return X, y
+    start = torch.randint(0, max_start + 1, (1,)).item()
+    return X[..., start:start + window], y
+
 
 def get_model(model_name: str, n_channels: int = 22, n_classes: int = 4) -> nn.Module:
     if model_name == "eegnet":
@@ -71,6 +83,7 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
     device:    torch.device,
+    augment: bool = False,
 ) -> tuple[float, float]:
     """One full pass over the training data.
 
@@ -90,6 +103,9 @@ def train_one_epoch(
     for X_batch, y_batch in loader:
         X_batch = X_batch.float().to(device)
         y_batch = y_batch.long().to(device)
+
+        if augment:
+            X_batch, y_batch = sliding_window_augment(X_batch, y_batch)
 
         optimizer.zero_grad()
         logits = model(X_batch)
@@ -199,7 +215,8 @@ def train(
         t0 = time.time()
 
         train_loss, train_acc = train_one_epoch(
-            model, train_loader, optimizer, criterion, device
+            model, train_loader, optimizer, criterion, device,
+            augment=(config["mode"] == "subject_dependent"),
         )
         val_loss, val_acc = validate(model, val_loader, criterion, device)
 
@@ -269,7 +286,7 @@ def main():
                         help="Fold key for loso mode (e.g. A01_rep0)")
 
     # Hyperparameters
-    parser.add_argument("--epochs",       type=int,   default=100)
+    parser.add_argument("--epochs",       type=int,   default=300)
     parser.add_argument("--lr",           type=float, default=0.001)
     parser.add_argument("--batch_size",   type=int,   default=32)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
@@ -304,10 +321,9 @@ def main():
     val_loader   = BCIDataLoader(**loader_kwargs, split="val",   shuffle=False)
 
     # --- FIX: normalize per-channel using training statistics only ---
-    norm = Normalizer()  # CHANGED: use training-set normalizer instead of TrialNormalizer
-    norm.fit(train_loader.dataset.X)  # CHANGED: fit only on training data
-    norm.apply_(train_loader.dataset)  # CHANGED: apply train-fitted stats to train split
-    norm.apply_(val_loader.dataset)  # CHANGED: apply same train-fitted stats to val split
+    norm = TrialNormalizer()  # CHANGED: use training-set normalizer instead of TrialNormalizer
+    norm.apply_(train_loader.dataset)
+    norm.apply_(val_loader.dataset)
 
     print(f"Train batches: {len(train_loader)} | Val batches: {len(val_loader)}")
 

@@ -41,18 +41,21 @@ def create_subject_dependent_splits():
     """70/30 random train/val split within each subject's T session; E session used for test."""
     splits = {}
     for subject in SUBJECTS:
-        labels = np.load(os.path.join(PROCESSED_DIR, f"{subject}T_y.npy"))
-        n = len(labels)
-        rng = np.random.RandomState(42 + int(subject[1:]))
-        indices = rng.permutation(n)
-        n_val = int(0.30 * n)
-
+        runs = np.load(os.path.join(PROCESSED_DIR, f"{subject}T_run.npy"))
+        n = len(runs)
+        all_indices = np.arange(n)
+        
+        # Run 4 as validation proxy for early stopping
+        val_indices   = np.where(runs == 4)[0]
+        # All other MI runs (3, 5, 6) for training
+        train_indices = np.where(np.isin(runs, [3, 5, 6]))[0]
+        
         splits[subject] = {
-            "train": indices[n_val:].tolist(),
-            "val": indices[:n_val].tolist(),
+            "train": train_indices.tolist(),
+            "val":   val_indices.tolist(),
             "train_session": "T",
-            "test_session": "E",
-	} 
+            "test_session":  "E",
+        }
     return splits
 
 
