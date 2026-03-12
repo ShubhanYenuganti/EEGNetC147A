@@ -55,10 +55,10 @@ class CNNLSTM(nn.Module):
         n_classes: int = 4,
         n_channels: int = 22,
         n_timepoints: int = 1000,
-        F1: int = 8,
-        F2: int = 16,
-        lstm_hidden: int = 32,
-        lstm_layers: int = 1,
+        F1: int = 32,
+        F2: int = 64,
+        lstm_hidden: int = 128,
+        lstm_layers: int = 2,
         dropout_rate: float = 0.5,
     ):
         super().__init__()
