@@ -225,7 +225,6 @@ def train(
         history["train_loss"].append(train_loss)
         history["train_acc"].append(train_acc)
         history["val_loss"].append(val_loss)
-        history["val_acc"].append(val_acc)
 
         elapsed = time.time() - t0
         print(
@@ -233,12 +232,20 @@ def train(
             f"{val_loss:>8.4f}  {val_acc:>6.2%}  {elapsed:>5.1f}s"
         )
 
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            best_val_loss  = val_loss
-            epochs_no_improve = 0
+        VAL_SMOOTH = 5  # epochs to average over
+
+        history["val_acc"].append(val_acc)
+
+        # only consider checkpointing after enough epochs to smooth
+        if len(history["val_acc"]) >= VAL_SMOOTH:
+            smoothed_val = sum(history["val_acc"][-VAL_SMOOTH:]) / VAL_SMOOTH
+        else:
+            smoothed_val = val_acc
+
+        if smoothed_val > best_val_acc:
+            best_val_acc = smoothed_val
             torch.save(model.state_dict(), checkpoint_path)
-            print(f"         ✓ Saved checkpoint (val_acc={val_acc:.2%}, val_loss={val_loss:.4f})")
+            print(f"  ✓ Saved checkpoint (smoothed_val={smoothed_val:.2%})")
         else:
             epochs_no_improve += 1
             if epochs_no_improve >= early_stop_patience and epoch > 100:
