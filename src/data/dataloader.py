@@ -340,13 +340,13 @@ class BCIDataLoader:
         if fold is None:
             raise ValueError("'fold' is required for mode='loso'")
 
-        fold_cfg = config["loso"][f"fold_{fold}"]
+        fold_cfg = config["loso"][fold]
 
         if split == "train":
             subjects = fold_cfg["train_subjects"]
             sessions = fold_cfg["train_sessions"]
         elif split == "val":
-            subjects = [fold_cfg["val_subject"]]
+            subjects = fold_cfg["val_subjects"]
             sessions = fold_cfg["val_sessions"]
         else:  # test
             subjects = [fold_cfg["test_subject"]]

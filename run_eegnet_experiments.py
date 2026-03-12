@@ -1,3 +1,4 @@
+import json
 import subprocess
 
 SUBJECTS = [f"A0{i}" for i in range(1, 10)]
@@ -13,11 +14,15 @@ for subj in SUBJECTS:
     ])
 
 # LOSO
-for fold in range(9):
+with open("configs/data_splits_TE.json") as f:
+    _config = json.load(f)
+loso_fold_keys = list(_config["loso"].keys())
+
+for fold_key in loso_fold_keys:
     subprocess.run([
         "python", "-m", "src.train",
         "--model", "eegnet",
         "--mode", "loso",
-        "--fold", str(fold),
+        "--fold", fold_key,
         "--epochs", "300",
     ])

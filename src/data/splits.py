@@ -5,11 +5,11 @@ Usage:
     python src/data/splits.py
 
 Output:
-    configs/data_splits.json
+    configs/data_splits_TE.json
 
 ## Within-subject (subject_dependent)
-4-fold blockwise CV using the first 4 MI runs (run indices 3–6, i.e., 48 trials each).
-Each fold uses 2 blocks for train, 1 for val, 1 for test (rotated).
+Random 70/30 train/val split of the T session (seeded per subject).
+Test always uses the E session.
 
 ## LOSO
 90 folds: 9 test subjects × 10 random repetitions.
@@ -38,7 +38,7 @@ _FOLD_TABLE = [
 
 
 def create_subject_dependent_splits():
-    """4-fold blockwise CV within each subject's training session."""
+    """70/30 random train/val split within each subject's T session; E session used for test."""
     splits = {}
     for subject in SUBJECTS:
         labels = np.load(os.path.join(PROCESSED_DIR, f"{subject}T_y.npy"))

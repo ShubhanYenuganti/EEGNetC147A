@@ -158,8 +158,8 @@ def evaluate_subject_dependent(model_name: str, device: torch.device, split_conf
 # LOSO evaluation
 # ---------------------------------------------------------------------------
 
-def evaluate_loso(model_name: str, device: torch.device) -> dict:
-    """Evaluate model on test split for all 9 LOSO folds.
+def evaluate_loso(model_name: str, device: torch.device, split_config: str = "configs/data_splits_TE.json") -> dict:
+    """Evaluate model on test split for all 90 LOSO folds.
 
     For each fold, loads the checkpoint saved by train.py and runs
     inference on that fold's held-out test subject.
@@ -167,47 +167,53 @@ def evaluate_loso(model_name: str, device: torch.device) -> dict:
     Returns:
         dict with per-fold accuracies, mean, and std
     """
+    with open(split_config) as f:
+        config = json.load(f)
+    fold_keys = list(config["loso"].keys())
+
     results = {}
 
     print(f"\nLOSO evaluation: {model_name}")
-    print(f"{'Fold':>6}  {'Test Acc':>8}")
-    print("-" * 18)
+    print(f"{'Fold':>12}  {'Test Acc':>8}")
+    print("-" * 24)
 
-    for fold in range(N_FOLDS):
+    for fold in fold_keys:
         checkpoint_path = os.path.join(
             "experiments", "checkpoints",
-            f"{model_name}_fold{fold}_loso_best.pt"
+            f"{model_name}_{fold}_loso_best.pt"
         )
 
         try:
             model = load_model(model_name, checkpoint_path, device)
         except FileNotFoundError as e:
-            print(f"{fold:>6}  MISSING CHECKPOINT")
-            print(f"           {e}")
+            print(f"{fold:>12}  MISSING CHECKPOINT")
+            print(f"               {e}")
             continue
 
-        train_loader = BCIDataLoader(  # CHANGED: rebuild LOSO train split to recover training normalization stats
-            mode="loso",  # CHANGED
-            fold=fold,  # CHANGED
-            split="train",  # CHANGED
-            batch_size=64,  # CHANGED
-            shuffle=False,  # CHANGED
-        )  # CHANGED
-        norm = Normalizer()  # CHANGED: use train-fitted normalizer
-        norm.fit(train_loader.dataset.X)  # CHANGED: fit on training data only
+        train_loader = BCIDataLoader(
+            mode="loso",
+            fold=fold,
+            split="train",
+            split_config=split_config,
+            batch_size=64,
+            shuffle=False,
+        )
+        norm = Normalizer()
+        norm.fit(train_loader.dataset.X)
 
         test_loader = BCIDataLoader(
             mode="loso",
             fold=fold,
             split="test",
+            split_config=split_config,
             batch_size=64,
             shuffle=False,
         )
-        norm.apply_(test_loader.dataset)  # CHANGED: apply train-fitted stats to test split
+        norm.apply_(test_loader.dataset)
 
         acc = evaluate_one(model, test_loader, device)
-        results[f"fold_{fold}"] = acc
-        print(f"{fold:>6} {acc:>7.2%}")
+        results[fold] = acc
+        print(f"{fold:>12} {acc:>7.2%}")
     
     if results:
         accs = list(results.values())
@@ -242,7 +248,7 @@ def save_results(results: dict, model_name: str, mode: str) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Train a model on BCI Competition IV 2a")
 
-    parser.add_argument("--split_config", type=str, default="configs/data_splits.json")
+    parser.add_argument("--split_config", type=str, default="configs/data_splits_TE.json")
 # Model and mode
     parser.add_argument("--model",   type=str, required=True,
                         choices=["dummy", "eegnet", "alternative_eegnet", "alternative_eegnet_250",
@@ -259,7 +265,7 @@ def main():
     if args.mode == "subject_dependent":
         results = evaluate_subject_dependent(args.model, device, args.split_config)
     else:
-        results = evaluate_loso(args.model, device)
+        results = evaluate_loso(args.model, device, args.split_config)
 
     save_results(results, args.model, args.mode)
     

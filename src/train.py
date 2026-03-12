@@ -251,7 +251,7 @@ def train(
 def main():
     parser = argparse.ArgumentParser(description="Train a model on BCI Competition IV 2a")
 
-    parser.add_argument("--split_config", type=str, default="configs/data_splits.json")
+    parser.add_argument("--split_config", type=str, default="configs/data_splits_TE.json")
 
  # Model and mode
     parser.add_argument("--model", type=str, required=True,
@@ -265,8 +265,8 @@ def main():
                         help="Subject ID for subject_dependent mode (e.g. A01)")
 
     # LOSO args
-    parser.add_argument("--fold", type=int, default=None,
-                        help="Fold index for loso mode (0-8)")
+    parser.add_argument("--fold", type=str, default=None,
+                        help="Fold key for loso mode (e.g. A01_rep0)")
 
     # Hyperparameters
     parser.add_argument("--epochs",       type=int,   default=100)
@@ -324,7 +324,7 @@ def main():
     if args.mode == "subject_dependent":
         run_id = f"{args.model}_{args.subject}_subject_dependent"
     else:
-        run_id = f"{args.model}_fold{args.fold}_loso"
+        run_id = f"{args.model}_{args.fold}_loso"
 
     checkpoint_path = os.path.join("experiments", "checkpoints", f"{run_id}_best.pt")
     results_path    = os.path.join("experiments", "results",      f"{run_id}.json")

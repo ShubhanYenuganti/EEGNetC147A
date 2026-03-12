@@ -13,7 +13,7 @@ EPOCHS = "300"
 BATCH_SIZE = "16"
 
 
-def load_loso_fold_keys(path="configs/data_splits.json"):
+def load_loso_fold_keys(path="configs/data_splits_TE.json"):
     with open(path, "r") as f:
         splits = json.load(f)
 
@@ -62,7 +62,7 @@ for fold_key in loso_fold_keys:
         "python", "-m", "src.train",
         "--model", "cnn_gru",
         "--mode", "loso",
-        "--fold_key", fold_key,
+        "--fold", fold_key,
         "--epochs", EPOCHS,
         "--lr", LR,
         "--weight_decay", WEIGHT_DECAY,
