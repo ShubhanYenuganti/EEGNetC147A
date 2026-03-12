@@ -139,6 +139,7 @@ def evaluate_subject_dependent(model_name: str, device: torch.device, split_conf
             split="test",
             batch_size=64,
             shuffle=False,
+            split_config=split_config,  # ← add this
         )
         norm.apply_(test_loader.dataset)  # CHANGED: apply train-fitted stats to test split
 

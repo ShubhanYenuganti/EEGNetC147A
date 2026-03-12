@@ -11,14 +11,14 @@ Design philosophy:
   sequence of CNN feature frames.
 
 Pipeline:
-  1. Temporal Conv   → learn frequency-specific filters across time
-  2. Depthwise Conv  → learn spatial (channel) mixtures per temporal filter
-  3. Separable Conv  → refine combined spatial-temporal features
-  4. Bi-GRU          → model temporal dynamics across the feature sequence
-  5. Attention pool  → weighted aggregation of GRU hidden states
-  6. Classifier      → linear projection to class logits
+  1. Temporal Conv   -> learn frequency-specific filters across time
+  2. Depthwise Conv  -> learn spatial (channel) mixtures per temporal filter
+  3. Separable Conv  -> refine combined spatial-temporal features
+  4. Bi-GRU          -> model temporal dynamics across the feature sequence
+  5. Attention pool  -> weighted aggregation of GRU hidden states
+  6. Classifier      -> linear projection to class logits
 
-Reference baseline: EEGNet (Lawhern et al., 2018) — ~2K params, ~68–72% 4-class
+Reference baseline: EEGNet (Lawhern et al., 2018) -- ~2K params, ~68-72% 4-class
 
 Tuned defaults (3-round grid search, optimised for cross-subject generalization):
   Round 1: lr=0.001, wd=5e-4
@@ -34,16 +34,16 @@ import torch.nn.functional as F
 
 
 # ---------------------------------------------------------------------------
-# Attention pooling – learns to weight GRU timesteps by relevance
+# Attention pooling - learns to weight GRU timesteps by relevance
 # ---------------------------------------------------------------------------
 class TemporalAttentionPool(nn.Module):
     """
     Soft attention over the time dimension of GRU output.
 
-    Given H ∈ (batch, T, D), computes:
-        e_t  = tanh(W · h_t + b)          → (batch, T, attn_dim)
-        α_t  = softmax(v · e_t)            → (batch, T)
-        c    = Σ α_t · h_t                 → (batch, D)
+    Given H in (batch, T, D), computes:
+        e_t  = tanh(W * h_t + b)          -> (batch, T, attn_dim)
+        a_t  = softmax(v * e_t)            -> (batch, T)
+        c    = sum a_t * h_t               -> (batch, D)
     """
 
     def __init__(self, hidden_dim: int, attn_dim: int = 48):
@@ -56,12 +56,12 @@ class TemporalAttentionPool(nn.Module):
         Args:
             h: (batch, seq_len, hidden_dim)
         Returns:
-            context: (batch, hidden_dim)  — attention-weighted summary
-            weights: (batch, seq_len)     — attention distribution (for visualisation)
+            context: (batch, hidden_dim)  -- attention-weighted summary
+            weights: (batch, seq_len)     -- attention distribution (for visualisation)
         """
-        e = torch.tanh(self.project(h))          # (B, T, attn_dim)
-        scores = self.context(e).squeeze(-1)      # (B, T)
-        weights = F.softmax(scores, dim=-1)       # (B, T)
+        e = torch.tanh(self.project(h))           # (B, T, attn_dim)
+        scores = self.context(e).squeeze(-1)       # (B, T)
+        weights = F.softmax(scores, dim=-1)        # (B, T)
         context = torch.bmm(weights.unsqueeze(1), h).squeeze(1)  # (B, D)
         return context, weights
 
@@ -118,10 +118,10 @@ class CNNGRU(nn.Module):
 
         F2 = F1 * D  # pointwise filter count
 
-        # ── CNN Block 1: temporal + depthwise spatial filtering ──────────
-        temporal_kernel = sfreq // 2  # 125 for 250 Hz — captures ~2 Hz bandwidth
+        # -- CNN Block 1: temporal + depthwise spatial filtering -------------
+        temporal_kernel = sfreq // 2  # 125 for 250 Hz -- captures ~2 Hz bandwidth
         self.cnn_block1 = nn.Sequential(
-            # Temporal convolution — frequency-specific feature extraction
+            # Temporal convolution -- frequency-specific feature extraction
             nn.Conv2d(
                 1, F1,
                 kernel_size=(1, temporal_kernel),
@@ -130,7 +130,7 @@ class CNNGRU(nn.Module):
             ),
             nn.BatchNorm2d(F1),
 
-            # Depthwise spatial convolution — learns channel (electrode) mixing
+            # Depthwise spatial convolution -- learns channel (electrode) mixing
             nn.Conv2d(
                 F1, F2,
                 kernel_size=(n_channels, 1),
@@ -139,11 +139,11 @@ class CNNGRU(nn.Module):
             ),
             nn.BatchNorm2d(F2),
             nn.ELU(),
-            nn.AvgPool2d(kernel_size=(1, 4)),   # 1000 → 250
+            nn.AvgPool2d(kernel_size=(1, 4)),   # 1000 -> 250
             nn.Dropout(cnn_dropout),
         )
 
-        # ── CNN Block 2: separable convolution for refined features ──────
+        # -- CNN Block 2: separable convolution for refined features ---------
         sep_kernel = sfreq // 8  # 32 for 250 Hz
         self.cnn_block2 = nn.Sequential(
             # Depthwise temporal conv
@@ -158,14 +158,14 @@ class CNNGRU(nn.Module):
             nn.Conv2d(F2, F2, kernel_size=(1, 1), bias=False),
             nn.BatchNorm2d(F2),
             nn.ELU(),
-            nn.AvgPool2d(kernel_size=(1, 8)),   # 250 → 31
+            nn.AvgPool2d(kernel_size=(1, 8)),   # 250 -> 31
             nn.Dropout(cnn_dropout),
         )
 
-        # ── Compute CNN output shape dynamically ─────────────────────────
-        cnn_out_features, cnn_out_timesteps = self._cnn_output_shape()
+        # -- Compute CNN output shape dynamically ----------------------------
+        cnn_out_features, _ = self._cnn_output_shape()
 
-        # ── Bidirectional GRU — temporal dynamics modelling ──────────────
+        # -- Bidirectional GRU -- temporal dynamics modelling ----------------
         self.gru = nn.GRU(
             input_size=cnn_out_features,
             hidden_size=gru_hidden,
@@ -180,10 +180,10 @@ class CNNGRU(nn.Module):
         # Layer norm on GRU output for stable training
         self.gru_norm = nn.LayerNorm(gru_out_dim)
 
-        # ── Temporal attention pooling ───────────────────────────────────
+        # -- Temporal attention pooling --------------------------------------
         self.attention = TemporalAttentionPool(gru_out_dim, attn_dim)
 
-        # ── Classifier head ──────────────────────────────────────────────
+        # -- Classifier head -------------------------------------------------
         self.classifier = nn.Sequential(
             nn.Dropout(fc_dropout),
             nn.Linear(gru_out_dim, n_classes),
@@ -193,11 +193,7 @@ class CNNGRU(nn.Module):
     # Helpers
     # ------------------------------------------------------------------
     def _cnn_output_shape(self) -> tuple[int, int]:
-        """
-        Run a dummy forward through CNN blocks to get (features, timesteps).
-        We reshape CNN output to (batch, timesteps, features) before the GRU,
-        so we need both dimensions.
-        """
+        """Run a dummy forward through CNN blocks to get (features, timesteps)."""
         with torch.no_grad():
             dummy = torch.zeros(1, 1, self.n_channels, self.n_timepoints)
             out = self.cnn_block2(self.cnn_block1(dummy))
@@ -214,7 +210,7 @@ class CNNGRU(nn.Module):
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            x: (batch, 1, n_channels, n_timepoints)  — or (batch, n_channels, n_timepoints)
+            x: (batch, 1, n_channels, n_timepoints) or (batch, n_channels, n_timepoints)
             return_attention: if True, also return attention weights for visualisation
 
         Returns:
@@ -223,9 +219,9 @@ class CNNGRU(nn.Module):
         """
         # Accept 3-D input for convenience
         if x.dim() == 3:
-            x = x.unsqueeze(1)  # (B, C, T) → (B, 1, C, T)
+            x = x.unsqueeze(1)  # (B, C, T) -> (B, 1, C, T)
 
-        # ── CNN feature extraction ───────────────────────────────────────
+        # -- CNN feature extraction ------------------------------------------
         x = self.cnn_block1(x)   # (B, F2, 1, T/4)
         x = self.cnn_block2(x)   # (B, F2, 1, T/32)
 
@@ -233,14 +229,14 @@ class CNNGRU(nn.Module):
         B, C, H, T = x.shape
         x = x.permute(0, 3, 1, 2).reshape(B, T, C * H)  # (B, T', F2)
 
-        # ── GRU temporal modelling ───────────────────────────────────────
+        # -- GRU temporal modelling ------------------------------------------
         x, _ = self.gru(x)       # (B, T', gru_out_dim)
         x = self.gru_norm(x)
 
-        # ── Attention pooling ────────────────────────────────────────────
+        # -- Attention pooling -----------------------------------------------
         context, attn_weights = self.attention(x)  # (B, gru_out_dim), (B, T')
 
-        # ── Classification ───────────────────────────────────────────────
+        # -- Classification --------------------------------------------------
         logits = self.classifier(context)  # (B, n_classes)
 
         if return_attention:
@@ -273,7 +269,7 @@ class CNNGRU(nn.Module):
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     print("=" * 65)
-    print(" CNN+GRU Hybrid (final R3 tuned) — Sanity Check")
+    print(" CNN+GRU Hybrid (final R3 tuned) -- Sanity Check")
     print("=" * 65)
 
     model = CNNGRU()
@@ -290,8 +286,9 @@ if __name__ == "__main__":
     logits2, attn_w = model(x, return_attention=True)
     print(f"Attention weights:  {tuple(attn_w.shape)}")
     assert attn_w.shape[0] == 8, "Attention batch mismatch"
-    assert torch.allclose(attn_w.sum(dim=-1), torch.ones(8), atol=1e-5), \
+    assert torch.allclose(attn_w.sum(dim=-1), torch.ones(8), atol=1e-5), (
         "Attention weights don't sum to 1"
+    )
 
     # 3-D input convenience
     x_3d = torch.randn(4, 22, 1000)
@@ -303,11 +300,11 @@ if __name__ == "__main__":
     print(f"CNN features:       {tuple(feats.shape)}")
 
     print("-" * 65)
-    print("✓ All sanity checks passed")
+    print("All sanity checks passed")
     print("=" * 65)
 
-    # ── Architecture summary ─────────────────────────────────────────
-    print("\n── Layer breakdown ──")
+    # -- Architecture summary ------------------------------------------------
+    print("\n-- Layer breakdown --")
     for name, module in model.named_children():
         n_params = sum(p.numel() for p in module.parameters() if p.requires_grad)
         print(f"  {name:20s}  {n_params:>8,} params")
