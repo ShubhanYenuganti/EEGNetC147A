@@ -3,52 +3,65 @@ BCIDataLoader — PyTorch DataLoader for BCI Competition IV Dataset 2a.
 
 ## Overview
 
-This module wraps the preprocessed .npy files and split config (configs/data_splits.json)
-into a standard PyTorch DataLoader. Two evaluation modes are supported:
+This module wraps the preprocessed .npy files and split config
+(configs/data_splits.json) into standard PyTorch DataLoaders. Two evaluation
+modes are supported:
 
-  - **subject_dependent**: Train, validate, and test within a single subject using
-    4-fold blockwise CV (first 4 MI runs, runs 3–6). All data from T session.
+  - **subject_dependent**: Train, validate, and test within a single subject
+    using a 70/15/15 index split. All data comes from that subject's Training
+    session (A##T).
 
-  - **loso** (Leave-One-Subject-Out): 90 folds (9 subjects × 10 random reps).
-    Train on 5 subjects (T), validate on 3 subjects (T), test on 1 subject (E).
+  - **loso** (Leave-One-Subject-Out): Train on 7 subjects, validate on 1,
+    test on 1. Both Training and Evaluation sessions are concatenated per
+    subject.
 
-## How It Works
+## Normalization
 
-1. `BCIDataset` (internal) loads .npy arrays and selects the right indices/subjects
-   depending on the mode. It acts as a standard `torch.utils.data.Dataset`.
+EEGNet (and all other architectures in this project) expect z-scored input.
+Normalization is per-channel, computed on training data only and applied to
+val/test. Use the `Normalizer` helper:
 
-2. `BCIDataLoader` builds a `BCIDataset`, wraps it in `torch.utils.data.DataLoader`,
-   and exposes the same DataLoader interface (iteration, `len`, etc.).
+    from src.data.dataloader import BCIDataLoader, Normalizer
 
-3. The split config (JSON) drives which trial indices or subjects belong to each split.
-   This keeps the data selection logic separate from the model code.
+    train_loader = BCIDataLoader(mode='subject_dependent', subject='A01',
+                                 split='train', batch_size=32)
+
+    norm = Normalizer()
+    norm.fit(train_loader.dataset.X)   # fit on raw training tensors
+
+    val_loader  = BCIDataLoader(..., split='val',  normalizer=norm)
+    test_loader = BCIDataLoader(..., split='test', normalizer=norm)
+
+    # Or apply post-hoc to an already-created loader's dataset:
+    norm.apply_(train_loader.dataset)
+
+The Normalizer computes mean and std across (trials, timepoints) independently
+for each of the 22 channels, then stores them so they can be reused for val/
+test without any leakage.
 
 ## API
 
 ### Subject-dependent
 
-    from src.data.dataloader import BCIDataLoader
-
     loader = BCIDataLoader(
         mode='subject_dependent',
-        subject='A01',          # which subject (A01–A09)
-        fold=0,                 # 0–3; blockwise CV fold
-        split='train',          # 'train', 'val', or 'test'
+        subject='A01',
+        split='train',
         batch_size=32,
         shuffle=True,
     )
 
     for X_batch, y_batch in loader:
-        # X_batch: (batch_size, 22, 256)  float32
-        # y_batch: (batch_size,)            long  (0-indexed: 0=Left, 1=Right, 2=Feet, 3=Tongue)
+        # X_batch: (batch, 22, 1000)  float32
+        # y_batch: (batch,)           long  (0-indexed: 0=Left, 1=Right, 2=Feet, 3=Tongue)
         ...
 
 ### LOSO
 
     loader = BCIDataLoader(
         mode='loso',
-        fold_key='A01_rep0',    # '{subject}_rep{0-9}'; or integer 0–89
-        split='train',          # 'train', 'val', or 'test'
+        fold=0,
+        split='train',
         batch_size=32,
         shuffle=True,
     )
@@ -57,10 +70,11 @@ into a standard PyTorch DataLoader. Two evaluation modes are supported:
 
     BCIDataLoader(
         ...,
-        data_path='data/processed/bci_competition_iv_2a',  # override default data dir
-        split_config='configs/data_splits.json',            # override default config
-        num_workers=0,                                      # passed to DataLoader
-        transform=None,                                     # callable applied to each X
+        data_path='data/processed/bci_competition_iv_2a',
+        split_config='configs/data_splits.json',
+        num_workers=0,
+        transform=None,      # callable applied to each X tensor (after normalization)
+        normalizer=None,     # Normalizer instance; applies norm during __getitem__
     )
 """
 
@@ -82,8 +96,87 @@ _DEFAULT_CONFIG    = os.path.join(_ROOT, "configs", "data_splits.json")
 
 
 # ---------------------------------------------------------------------------
+# Normalizer
+# ---------------------------------------------------------------------------
+
+class Normalizer:
+    """Per-channel z-score normalizer fitted on training data.
+
+    Stats are computed across the (trials, timepoints) axes independently for
+    each of the 22 EEG channels, so each channel is normalized to zero mean and
+    unit variance.
+
+    Usage:
+        norm = Normalizer()
+        norm.fit(X_train_tensor)        # shape: (n, 22, 1000)
+        norm.apply_(train_dataset)
+        norm.apply_(val_dataset)
+        norm.apply_(test_dataset)       # always use training stats
+
+    After apply_() the dataset's X tensor is modified in-place.
+    """
+
+    def __init__(self):
+        self.mean_: Optional[torch.Tensor] = None   # (1, 22, 1)
+        self.std_:  Optional[torch.Tensor] = None   # (1, 22, 1)
+
+    def fit(self, X: torch.Tensor) -> "Normalizer":
+        """Compute mean and std from X (n_trials, n_channels, n_timepoints).
+
+        Args:
+            X: float32 tensor of shape (n, 22, 1000).
+
+        Returns:
+            self, for chaining.
+        """
+        # Average over trial and time axes; keep channel axis
+        self.mean_ = X.mean(dim=(0, 2), keepdim=True)   # (1, 22, 1)
+        self.std_  = X.std(dim=(0, 2), keepdim=True).clamp(min=1e-6)
+        return self
+
+    def transform(self, X: torch.Tensor) -> torch.Tensor:
+        """Apply stored normalization to X. Does NOT modify in place."""
+        if self.mean_ is None:
+            raise RuntimeError("Normalizer has not been fitted. Call fit() first.")
+        return (X - self.mean_) / self.std_
+
+    def apply_(self, dataset: "BCIDataset") -> None:
+        """Normalize dataset.X in-place using stored stats.
+
+        Typical use:
+            norm.fit(train_ds.X)
+            norm.apply_(train_ds)
+            norm.apply_(val_ds)
+            norm.apply_(test_ds)
+        """
+        if self.mean_ is None:
+            raise RuntimeError("Normalizer has not been fitted. Call fit() first.")
+        dataset.X = self.transform(dataset.X)
+
+
+# ---------------------------------------------------------------------------
 # Internal Dataset
 # ---------------------------------------------------------------------------
+class TrialNormalizer:
+    """Normalize each trial independently (zero mean, unit variance per channel).
+
+    Unlike Normalizer, this requires no fitting — each trial is normalized
+    using its own statistics. This removes inter-subject baseline differences,
+    which is critical for LOSO generalization: the val/test subject's signals
+    will be at the same scale as training signals regardless of who they are.
+
+    Usage:
+        norm = TrialNormalizer()
+        norm.apply_(train_loader.dataset)
+        norm.apply_(val_loader.dataset)
+        norm.apply_(test_loader.dataset)
+    """
+
+    def apply_(self, dataset: "BCIDataset") -> None:
+        X = dataset.X                                    # (n_trials, 22, 1000)
+        mean = X.mean(dim=2, keepdim=True)               # (n_trials, 22, 1)
+        std  = X.std(dim=2,  keepdim=True).clamp(min=1e-6)
+        dataset.X = (X - mean) / std
 
 class BCIDataset(Dataset):
     """Holds the NumPy arrays for a single split and exposes them as tensors.
@@ -94,15 +187,15 @@ class BCIDataset(Dataset):
 
     def __init__(
         self,
-        X: np.ndarray,
-        y: np.ndarray,
+        X:         np.ndarray,
+        y:         np.ndarray,
         transform: Optional[Callable] = None,
     ):
-        self.X = torch.tensor(X, dtype=torch.float32)
-        self.y = torch.tensor(y - 1, dtype=torch.long)  # 1-4 → 0-3
+        self.X         = torch.tensor(X, dtype=torch.float32)
+        self.y         = torch.tensor(y - 1, dtype=torch.long)   # 1–4 → 0–3
         self.transform = transform
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.y)
 
     def __getitem__(self, idx):
@@ -125,12 +218,30 @@ def _load_npy(data_path: str, subject: str, session: str):
 
 
 def _concat_sessions(data_path: str, subject: str, sessions: list[str]):
-    """Concatenate multiple sessions for one subject."""
+    """Concatenate multiple sessions for one subject.
+
+    Sessions that are missing from disk are skipped gracefully (e.g. if an
+    Evaluation file hasn't been downloaded yet). If no sessions are found at
+    all, a FileNotFoundError is raised rather than silently returning empty
+    data.
+    """
     Xs, ys = [], []
     for sess in sessions:
+        x_path = os.path.join(data_path, f"{subject}{sess}_X.npy")
+        if not os.path.exists(x_path):
+            # Warn but continue — may have only T or only E session
+            print(f"  [dataloader] WARNING: {subject}{sess}_X.npy not found, skipping.")
+            continue
         X, y = _load_npy(data_path, subject, sess)
         Xs.append(X)
         ys.append(y)
+
+    if not Xs:
+        raise FileNotFoundError(
+            f"No session files found for subject '{subject}' in {data_path}. "
+            f"Looked for sessions: {sessions}"
+        )
+
     return np.concatenate(Xs, axis=0), np.concatenate(ys, axis=0)
 
 
@@ -142,29 +253,41 @@ class BCIDataLoader:
     """PyTorch DataLoader for BCI Competition IV Dataset 2a.
 
     Supports two modes:
-      - 'subject_dependent': single subject, 4-fold blockwise CV (fold 0–3)
-      - 'loso': cross-subject, 90 folds (5 train / 3 val / 1 test subjects)
+      - 'subject_dependent': single subject, index-based 70/15/15 split.
+      - 'loso': cross-subject, 7 train / 1 val / 1 test subject per fold.
+
+    Normalization workflow (recommended):
+
+        train_loader = BCIDataLoader(mode=..., split='train', ...)
+        norm = Normalizer()
+        norm.fit(train_loader.dataset.X)
+        norm.apply_(train_loader.dataset)
+
+        val_loader  = BCIDataLoader(mode=..., split='val',  ...)
+        test_loader = BCIDataLoader(mode=..., split='test', ...)
+        norm.apply_(val_loader.dataset)
+        norm.apply_(test_loader.dataset)
 
     See module docstring for full usage examples.
     """
 
     def __init__(
         self,
-        mode: str,
+        mode:  str,
         split: str,
         *,
         # subject_dependent args
         subject: Optional[str] = None,
-        fold: Optional[int] = None,          # 0–3 for subject_dependent
         # loso args
-        fold_key: Optional[str] = None,      # e.g. 'A01_rep3' for loso
+        fold: Optional[int] = None,
         # shared / optional
-        data_path: str = _DEFAULT_DATA_PATH,
+        data_path:    str = _DEFAULT_DATA_PATH,
         split_config: str = _DEFAULT_CONFIG,
-        batch_size: int = 32,
-        shuffle: bool = False,
-        num_workers: int = 0,
-        transform: Optional[Callable] = None,
+        batch_size:   int = 32,
+        shuffle:      bool = False,
+        num_workers:  int = 0,
+        transform:    Optional[Callable] = None,
+        normalizer:   Optional[Normalizer] = None,
     ):
         if mode not in ("subject_dependent", "loso"):
             raise ValueError(f"mode must be 'subject_dependent' or 'loso', got '{mode}'")
@@ -175,11 +298,16 @@ class BCIDataLoader:
             config = json.load(f)
 
         if mode == "subject_dependent":
-            X, y = self._build_subject_dependent(config, data_path, subject, fold, split)
+            X, y = self._build_subject_dependent(config, data_path, subject, split)
         else:
-            X, y = self._build_loso(config, data_path, fold_key, split)
+            X, y = self._build_loso(config, data_path, fold, split)
 
         dataset = BCIDataset(X, y, transform=transform)
+
+        # Apply normalizer if provided (caller fitted it on training data)
+        if normalizer is not None:
+            normalizer.apply_(dataset)
+
         self._loader = DataLoader(
             dataset,
             batch_size=batch_size,
@@ -192,32 +320,33 @@ class BCIDataLoader:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_subject_dependent(config, data_path, subject, fold, split):
+    def _build_subject_dependent(config, data_path, subject, split):
         if subject is None:
             raise ValueError("'subject' is required for mode='subject_dependent'")
-        if fold is None:
-            raise ValueError("'fold' (0–3) is required for mode='subject_dependent'")
 
         subj_cfg = config["subject_dependent"][subject]
-        fold_cfg = subj_cfg[f"fold_{fold}"]
-        indices  = fold_cfg[split]           # list of trial indices
-        session  = subj_cfg["session"]       # always 'T'
-
-        X, y = _load_npy(data_path, subject, session)
-        return X[indices], y[indices]
+        if split == "test":
+            test_session = subj_cfg.get("test_session", subj_cfg.get("session", "T"))
+            X, y = _load_npy(data_path, subject, test_session)
+            return X, y
+        else:
+            indices = subj_cfg[split]
+            train_session = subj_cfg.get("train_session", subj_cfg.get("session", "T"))
+            X, y = _load_npy(data_path, subject, train_session)
+            return X[indices], y[indices]
 
     @staticmethod
-    def _build_loso(config, data_path, fold_key, split):
-        if fold_key is None:
-            raise ValueError("'fold_key' (e.g. 'A01_rep3') is required for mode='loso'")
+    def _build_loso(config, data_path, fold, split):
+        if fold is None:
+            raise ValueError("'fold' is required for mode='loso'")
 
-        fold_cfg = config["loso"][fold_key]
+        fold_cfg = config["loso"][f"fold_{fold}"]
 
         if split == "train":
             subjects = fold_cfg["train_subjects"]
             sessions = fold_cfg["train_sessions"]
         elif split == "val":
-            subjects = fold_cfg["val_subjects"]
+            subjects = [fold_cfg["val_subject"]]
             sessions = fold_cfg["val_sessions"]
         else:  # test
             subjects = [fold_cfg["test_subject"]]
@@ -237,9 +366,9 @@ class BCIDataLoader:
     def __iter__(self):
         return iter(self._loader)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._loader)
 
     @property
-    def dataset(self):
+    def dataset(self) -> BCIDataset:
         return self._loader.dataset

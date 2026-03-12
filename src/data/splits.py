@@ -41,18 +41,18 @@ def create_subject_dependent_splits():
     """4-fold blockwise CV within each subject's training session."""
     splits = {}
     for subject in SUBJECTS:
-        run = np.load(os.path.join(PROCESSED_DIR, f"{subject}T_run.npy"))
-        n   = len(run)
-        all_indices = np.arange(n)
+        labels = np.load(os.path.join(PROCESSED_DIR, f"{subject}T_y.npy"))
+        n = len(labels)
+        rng = np.random.RandomState(42 + int(subject[1:]))
+        indices = rng.permutation(n)
+        n_val = int(0.30 * n)
 
-        folds = {}
-        for fold_idx, (test_run, val_run, train_runs) in enumerate(_FOLD_TABLE):
-            test  = all_indices[run == test_run].tolist()
-            val   = all_indices[run == val_run].tolist()
-            train = all_indices[np.isin(run, train_runs)].tolist()
-            folds[f"fold_{fold_idx}"] = {"train": train, "val": val, "test": test}
-
-        splits[subject] = {**folds, "session": "T"}
+        splits[subject] = {
+            "train": indices[n_val:].tolist(),
+            "val": indices[:n_val].tolist(),
+            "train_session": "T",
+            "test_session": "E",
+	} 
     return splits
 
 
@@ -85,7 +85,7 @@ def main():
     }
 
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    out_path = os.path.join(CONFIG_DIR, "data_splits.json")
+    out_path = os.path.join(CONFIG_DIR, "data_splits_TE.json")
     with open(out_path, "w") as f:
         json.dump(config, f, indent=2)
 
@@ -93,15 +93,9 @@ def main():
     sd = config["subject_dependent"]
     loso = config["loso"]
     print("Created data splits configuration")
-    print(f"  Subject-dependent: {len(sd)} subjects × 4 folds (blockwise)")
-    for subj in list(sd.keys())[:2]:
-        for fold in ["fold_0", "fold_1"]:
-            fc = sd[subj][fold]
-            print(f"    {subj} {fold}: train={len(fc['train'])}, val={len(fc['val'])}, test={len(fc['test'])}")
-    print(f"  LOSO: {len(loso)} folds (9 subjects × 10 reps)")
-    sample = list(loso.keys())[0]
-    sc = loso[sample]
-    print(f"    {sample}: train={sc['train_subjects']}, val={sc['val_subjects']}, test={sc['test_subject']}")
+    print(f"  Subject-dependent: {len(sd)} subjects (T train/val, E test)")
+    for subj, split in sd.items():
+        print(f"    {subj}: train={len(split['train'])}, val={len(split['val'])}, test_session=E")
     print(f"  Saved to: {os.path.normpath(out_path)}")
 
 
