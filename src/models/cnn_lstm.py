@@ -16,6 +16,24 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class MaxNormConstraint:
+    """Clips the L2 norm of a parameter tensor to `max_norm` in-place.
+
+    Usage:
+        constraint = MaxNormConstraint(module.weight, max_norm=1.0)
+        # call constraint() after every optimizer.step()
+    """
+    def __init__(self, param: nn.Parameter, max_norm: float, dim: int = 0):
+        self.param    = param
+        self.max_norm = max_norm
+        self.dim      = dim
+
+    def __call__(self):
+        with torch.no_grad():
+            norms = self.param.norm(2, dim=self.dim, keepdim=True).clamp(min=1e-8)
+            scale = (norms / self.max_norm).clamp(min=1.0)
+            self.param.div_(scale)
+
 
 class CNNLSTM(nn.Module):
     """
@@ -41,7 +59,7 @@ class CNNLSTM(nn.Module):
         F2: int = 16,
         lstm_hidden: int = 32,
         lstm_layers: int = 1,
-        dropout_rate: float = 0.7,
+        dropout_rate: float = 0.5,
     ):
         super().__init__()
 
@@ -101,6 +119,13 @@ class CNNLSTM(nn.Module):
             nn.Linear(lstm_hidden, n_classes),
         )
 
+        self._dw_constraint = MaxNormConstraint(
+            self.spatial_conv[0].weight, max_norm=1.0, dim=0
+        )
+        self._cls_constraint = MaxNormConstraint(
+            self.classifier[1].weight, max_norm=0.25, dim=1
+        )
+
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -128,6 +153,14 @@ class CNNLSTM(nn.Module):
 
     def count_parameters(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+    
+    def apply_constraints(self):
+        self._dw_constraint()
+        self._cls_constraint()
+
+    def apply_max_norm_(self) -> None:
+        self.apply_constraints()
+
 
 
 # sanity check 
