@@ -12,6 +12,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 
 import torch
 import numpy as np
@@ -25,6 +26,7 @@ from src.data.dataloader import BCIDataLoader, TrialNormalizer, Normalizer  # CH
 
 SUBJECTS = [f"A{i:02d}" for i in range(1, 10)]
 N_FOLDS  = 9
+LOSO_REPS = 4
 
 # ---------------------------------------------------------------------------
 # Load model - from train.py
@@ -159,7 +161,7 @@ def evaluate_subject_dependent(model_name: str, device: torch.device, split_conf
 # ---------------------------------------------------------------------------
 
 def evaluate_loso(model_name: str, device: torch.device, split_config: str = "configs/data_splits_TE.json") -> dict:
-    """Evaluate model on test split for all 90 LOSO folds.
+    """Evaluate model on test split for LOSO folds (default: 9 subjects x 4 reps = 36).
 
     For each fold, loads the checkpoint saved by train.py and runs
     inference on that fold's held-out test subject.
@@ -169,11 +171,17 @@ def evaluate_loso(model_name: str, device: torch.device, split_config: str = "co
     """
     with open(split_config) as f:
         config = json.load(f)
-    fold_keys = list(config["loso"].keys())
+    fold_keys = []
+    for key in config["loso"].keys():
+        match = re.search(r"_rep(\d+)$", key)
+        if match and int(match.group(1)) < LOSO_REPS:
+            fold_keys.append(key)
+    fold_keys.sort()
 
     results = {}
 
     print(f"\nLOSO evaluation: {model_name}")
+    print(f"Using {LOSO_REPS} permutations per subject ({len(fold_keys)} folds total)")
     print(f"{'Fold':>12}  {'Test Acc':>8}")
     print("-" * 24)
 
