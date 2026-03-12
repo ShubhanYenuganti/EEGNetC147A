@@ -207,8 +207,9 @@ def evaluate_loso(model_name: str, device: torch.device, split_config: str = "co
             batch_size=64,
             shuffle=False,
         )
-        norm = Normalizer()
-        norm.fit(train_loader.dataset.X)
+        norm = TrialNormalizer()
+        norm.apply_(test_loader.dataset)
+
 
         test_loader = BCIDataLoader(
             mode="loso",
