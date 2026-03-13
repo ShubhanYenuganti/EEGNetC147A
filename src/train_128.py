@@ -89,6 +89,9 @@ def get_model(model_name: str, n_channels: int = 22, n_classes: int = 4, dropout
         from src.models.cnn_gru_alternative import CNNGRU as CNNGRUAlt
         return CNNGRUAlt(n_channels=n_channels, n_classes=n_classes,
                          cnn_dropout=dropout_rate, fc_dropout=dropout_rate)
+    elif model_name == "lstm_alternative":
+        from src.models.lstm_alternative import LSTM as PureLSTM
+        return PureLSTM(n_channels=n_channels, n_classes=n_classes, dropout_rate=dropout_rate)
     elif model_name == "transformer":
         from src.models.transformer import EEGTransformer
         return EEGTransformer(n_channels=n_channels, n_classes=n_classes)
@@ -100,7 +103,7 @@ def get_model(model_name: str, n_channels: int = 22, n_classes: int = 4, dropout
             f"Unknown model: {model_name}. "
             f"Options: eegnet, alternative_eegnet, alternative_eegnet_250, "
             f"cnn_lstm, cnn_lstm_alternative, tcn, lstm, "
-            f"cnn_gru, cnn_gru_alternative, transformer, dummy"
+            f"cnn_gru, cnn_gru_alternative, transformer, lstm_alternative, dummy"
         )
 
 
@@ -109,12 +112,14 @@ def get_model(model_name: str, n_channels: int = 22, n_classes: int = 4, dropout
 # ---------------------------------------------------------------------------
 
 def train_one_epoch(
-    model:     nn.Module,
-    loader:    BCIDataLoader,
-    optimizer: torch.optim.Optimizer,
-    criterion: nn.Module,
-    device:    torch.device,
-    augment:   bool = False,
+    model:         nn.Module,
+    loader:        BCIDataLoader,
+    optimizer:     torch.optim.Optimizer,
+    criterion:     nn.Module,
+    device:        torch.device,
+    augment:       bool  = False,
+    aug_shift:     int   = 64,
+    sign_flip_p:   float = 0.0,
 ) -> tuple[float, float]:
     model.train()
     total_loss = 0.0
@@ -126,9 +131,12 @@ def train_one_epoch(
         y_batch = y_batch.long().to(device)
 
         if augment:
-            X_batch, y_batch = sliding_window_augment(X_batch, y_batch, max_shift=64)
+            X_batch, y_batch = sliding_window_augment(X_batch, y_batch, max_shift=aug_shift)
             scale = torch.empty(X_batch.size(0), 1, 1, device=X_batch.device).uniform_(0.8, 1.2)
             X_batch = X_batch * scale
+            if sign_flip_p > 0.0:
+                flip = torch.rand(X_batch.size(0), 1, 1, device=X_batch.device) < sign_flip_p
+                X_batch = torch.where(flip, -X_batch, X_batch)
 
         optimizer.zero_grad()
         logits = model(X_batch)
@@ -195,7 +203,7 @@ def train(
         lr=config["lr"],
         weight_decay=config.get("weight_decay", 1e-4),
     )
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+    criterion = nn.CrossEntropyLoss(label_smoothing=config.get("label_smoothing", 0.1))
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=config["epochs"], eta_min=1e-5
     )
@@ -221,7 +229,9 @@ def train(
 
         train_loss, train_acc = train_one_epoch(
             model, train_loader, optimizer, criterion, device,
-            augment=(config["mode"] == "subject_dependent"),
+            augment=True,
+            aug_shift=config["aug_shift"],
+            sign_flip_p=config["sign_flip_p"],
         )
         val_loss, val_acc = validate(model, val_loader, criterion, device)
 
@@ -251,7 +261,7 @@ def train(
             print(f"  ✓ Saved checkpoint (smoothed_val={smoothed_val:.2%})")
         else:
             epochs_no_improve += 1
-            if epochs_no_improve >= early_stop_patience and epoch > 100:   # was epoch > 100
+            if epochs_no_improve >= early_stop_patience and epoch > config["min_epoch"]:
                 print(f"\nEarly stopping at epoch {epoch} "
                       f"(no improvement for {early_stop_patience} epochs)")
                 break
@@ -287,7 +297,8 @@ def main():
                         choices=["dummy", "eegnet", "alternative_eegnet",
                                  "alternative_eegnet_250", "cnn_lstm",
                                  "cnn_lstm_alternative", "tcn", "lstm",
-                                 "cnn_gru", "cnn_gru_alternative", "transformer"])
+                                 "cnn_gru", "cnn_gru_alternative", "transformer",
+                                 "lstm_alternative"])
     parser.add_argument("--mode",  type=str, required=True,
                         choices=["subject_dependent", "loso"])
 
@@ -298,8 +309,14 @@ def main():
     parser.add_argument("--lr",           type=float, default=0.001)
     parser.add_argument("--batch_size",   type=int,   default=32)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
-    parser.add_argument("--dropout",      type=float, default=0.6)
-    parser.add_argument("--num_workers",  type=int,   default=0)
+    parser.add_argument("--dropout",         type=float, default=0.6)
+    parser.add_argument("--num_workers",     type=int,   default=0)
+    parser.add_argument("--min_epoch",       type=int,   default=100)
+    parser.add_argument("--aug_shift",       type=int,   default=64,
+                        help="Max time-shift for sliding window augmentation (samples, default 64)")
+    parser.add_argument("--label_smoothing", type=float, default=0.1)
+    parser.add_argument("--sign_flip_p",     type=float, default=0.0,
+                        help="P(negate trial amplitude) per sample (0=off, 0.5 recommended)")
 
     args = parser.parse_args()
 
@@ -360,7 +377,11 @@ def main():
         "device":       device,
         "data_path":    args.data_path,
         "split_config": args.split_config,
-        "norm":         "none (ERS applied in preprocessing)",
+        "norm":            "none (ERS applied in preprocessing)",
+        "min_epoch":       args.min_epoch,
+        "aug_shift":       args.aug_shift,
+        "label_smoothing": args.label_smoothing,
+        "sign_flip_p":     args.sign_flip_p,
     }
 
     train(model, train_loader, val_loader, config, checkpoint_path, results_path)

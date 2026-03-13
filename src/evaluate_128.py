@@ -259,7 +259,8 @@ def main():
                         choices=["dummy", "eegnet", "alternative_eegnet",
                                  "alternative_eegnet_250", "cnn_lstm",
                                  "cnn_lstm_alternative", "tcn", "lstm",
-                                 "cnn_gru", "cnn_gru_alternative", "transformer"])
+                                 "cnn_gru", "cnn_gru_alternative", "transformer",
+                                 "lstm_alternative"])
     parser.add_argument("--mode", type=str, required=True,
                         choices=["subject_dependent", "loso"])
 

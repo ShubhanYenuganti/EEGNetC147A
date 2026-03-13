@@ -19,7 +19,11 @@ parser.add_argument("--epochs",       default="300")
 parser.add_argument("--lr",           default="0.001")
 parser.add_argument("--weight_decay", default="5e-4")
 parser.add_argument("--batch_size",   default="8")
-parser.add_argument("--dropout",      default="0.4")
+parser.add_argument("--dropout",         default="0.4")
+parser.add_argument("--min_epoch",       default="100")
+parser.add_argument("--aug_shift",       default="64")
+parser.add_argument("--label_smoothing", default="0.1")
+parser.add_argument("--sign_flip_p",     default="0.0")
 args = parser.parse_args()
 
 with open("configs/data_splits_128.json") as f:
@@ -47,7 +51,9 @@ def fmt(s):
 
 print(
     f"LOSO-128 training: {args.model} | {n} folds ({args.reps} reps × {n_subjects} subjects) | "
-    f"epochs={args.epochs} lr={args.lr} wd={args.weight_decay} bs={args.batch_size} dropout={args.dropout}"
+    f"epochs={args.epochs} lr={args.lr} wd={args.weight_decay} bs={args.batch_size} "
+    f"dropout={args.dropout} min_epoch={args.min_epoch} aug_shift={args.aug_shift} "
+    f"label_smoothing={args.label_smoothing} sign_flip_p={args.sign_flip_p}"
 )
 
 t0 = time.time()
@@ -73,8 +79,12 @@ for s_idx, subj in enumerate(subjects_order):
             "--epochs",       args.epochs,
             "--lr",           args.lr,
             "--weight_decay", args.weight_decay,
-            "--batch_size",   args.batch_size,
-            "--dropout",      args.dropout,
+            "--batch_size",      args.batch_size,
+            "--dropout",         args.dropout,
+            "--min_epoch",       args.min_epoch,
+            "--aug_shift",       args.aug_shift,
+            "--label_smoothing", args.label_smoothing,
+            "--sign_flip_p",     args.sign_flip_p,
         ])
         fold_elapsed = time.time() - fold_start
         elapsed = time.time() - t0
