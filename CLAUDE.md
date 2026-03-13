@@ -130,19 +130,10 @@ python src/data/alternative_splits.py       # → configs/data_splits_128.json
 8. Save `{subject}{T|E}_X.npy` `(n, 22, 256)`, `_y.npy`, `_run.npy`
 
 `alternative_splits.py` produces `configs/data_splits_128.json`:
-- **Subject-dependent only**: 80/20 stratified random train/val split of T session per subject (seed = subject index 1–9), E session → test. No LOSO for the 128 Hz pipeline.
+- **Subject-dependent**: 80/20 stratified random train/val split of T session per subject (seed = subject index 1–9), E session → test.
+- **LOSO**: 36 folds (9 test subjects × 4 random reps, keys like `A01_rep0`). Identical fold assignments to `data_splits_TE.json` (same seed=42). Per fold: 5 train subjects (T) / 3 val subjects (T) / 1 test subject (E only).
 
 ### Training (128 Hz / ERS)
-
-```bash
-# Subject-dependent — single subject
-python -m src.train_128 --model <model> --mode subject_dependent --subject A01 \
-    --epochs 300 --lr 0.001 --weight_decay 5e-4 --batch_size 16 --dropout 0.5
-
-# Subject-dependent — all 9 subjects via runner
-python run_subject_dependent_128.py --model <model> --epochs 300 --lr 0.001 \
-    --weight_decay 5e-4 --batch_size 16 --dropout 0.5
-```
 
 **Available models for `src/train_128.py`:**
 
@@ -152,32 +143,44 @@ python run_subject_dependent_128.py --model <model> --epochs 300 --lr 0.001 \
 | `cnn_gru_alternative` | `models/cnn_gru_alternative.py` | **Recommended.** 128 Hz-native CNN+BiGRU+attention. temporal_kernel=64, track_running_stats=False, dropout forwarded |
 | `cnn_lstm_alternative` | `models/cnn_lstm_alternative.py` | **Recommended.** 128 Hz-adapted CNN+LSTM. temporal_kernel=64 (sfreq//2), track_running_stats=False, dropout forwarded |
 
-**Recommended commands per model:**
+**Subject-dependent:**
 
 ```bash
-# cnn_gru_alternative (best performing, tuned defaults)
+# Single subject
 python -m src.train_128 --model cnn_gru_alternative --mode subject_dependent --subject A01 \
     --epochs 300 --lr 0.001 --weight_decay 5e-4 --batch_size 8 --dropout 0.4
 
-# All 9 subjects
+# All 9 subjects via runner
 python run_subject_dependent_128.py --model cnn_gru_alternative \
     --epochs 300 --lr 0.001 --weight_decay 5e-4 --batch_size 8 --dropout 0.4
-
-# cnn_lstm_alternative
-python -m src.train_128 --model cnn_lstm_alternative --mode subject_dependent --subject A01 \
-    --epochs 300 --lr 0.001 --weight_decay 5e-4 --batch_size 8 --dropout 0.4
-
-# All 9 subjects
 python run_subject_dependent_128.py --model cnn_lstm_alternative \
     --epochs 300 --lr 0.001 --weight_decay 5e-4 --batch_size 8 --dropout 0.4
-
-# alternative_eegnet
-python -m src.train_128 --model alternative_eegnet --mode subject_dependent --subject A01 \
+python run_subject_dependent_128.py --model alternative_eegnet \
     --epochs 300 --lr 0.001 --dropout 0.4
 ```
 
-Checkpoints are saved to `experiments/checkpoints/{model}_{subject}_subject_dependent_128_best.pt`.
-Training results (loss/accuracy history) are saved to `experiments/results/{model}_{subject}_subject_dependent_128.json`.
+Checkpoints: `experiments/checkpoints/{model}_{subject}_subject_dependent_128_best.pt`
+Results: `experiments/results/{model}_{subject}_subject_dependent_128.json`
+
+**LOSO (36 folds: 9 subjects × 4 reps):**
+
+```bash
+# Single fold
+python -m src.train_128 --model cnn_gru_alternative --mode loso --fold A01_rep0 \
+    --epochs 300 --lr 0.001 --weight_decay 5e-4 --batch_size 8 --dropout 0.4
+
+# All 36 folds with ETA timer
+python run_loso_128.py --model cnn_gru_alternative \
+    --epochs 300 --lr 0.001 --weight_decay 5e-4 --batch_size 8 --dropout 0.4
+python run_loso_128.py --model cnn_lstm_alternative \
+    --epochs 300 --lr 0.001 --weight_decay 5e-4 --batch_size 8 --dropout 0.4
+
+# Fast run (1 rep = 9 folds)
+python run_loso_128.py --model cnn_gru_alternative --reps 1 --epochs 300
+```
+
+Checkpoints: `experiments/checkpoints/{model}_{fold}_loso_128_best.pt`
+Results: `experiments/results/{model}_{fold}_loso_128.json`
 
 **Important:** Do not apply `--norm` or `TrialNormalizer` with this pipeline — ERS normalisation was already applied during preprocessing. Double-normalising degrades training signal.
 
@@ -188,12 +191,17 @@ Training results (loss/accuracy history) are saved to `experiments/results/{mode
 python -m src.evaluate_128 --model cnn_gru_alternative --mode subject_dependent
 python -m src.evaluate_128 --model cnn_lstm_alternative --mode subject_dependent
 python -m src.evaluate_128 --model alternative_eegnet --mode subject_dependent
+
+# LOSO — aggregates mean ± std across all 36 folds
+python -m src.evaluate_128 --model cnn_gru_alternative --mode loso
+python -m src.evaluate_128 --model cnn_lstm_alternative --mode loso
 ```
 
-Outputs a table of train/val/test accuracy per subject plus mean and std across subjects.
-Results saved to `experiments/results/{model}_subject_dependent_128_eval.json`.
+Subject-dependent outputs train/val/test accuracy per subject plus mean ± std.
+LOSO outputs test accuracy per fold plus mean ± std across folds.
+Results saved to `experiments/results/{model}_{mode}_128_eval_{YYYYMMDD_HHMMSS}.json` (timestamped to avoid overwrites). Each eval JSON includes a `"training_config"` block with the hyperparameters used during training.
 
-The evaluator loads checkpoints from `experiments/checkpoints/` using the same naming convention as `train_128.py`. If a checkpoint is missing for a subject, that subject is skipped with a warning.
+The evaluator loads checkpoints from `experiments/checkpoints/` using the same naming convention as `train_128.py`. If a checkpoint is missing for a subject/fold, it is skipped with a warning.
 
 ---
 
@@ -228,7 +236,7 @@ The evaluator loads checkpoints from `experiments/checkpoints/` using the same n
 
 ### Evaluation Modes
 - **Subject-dependent**: T session for train/val, E session for test. `BCIDataLoader` takes `subject` (e.g. `'A01'`).
-- **LOSO**: 36 folds (string `fold` key like `A01_rep0`, resolved via `configs/data_splits_TE.json`). Test always uses E session; train/val always use T sessions. **250 Hz pipeline only** — not implemented for 128 Hz.
+- **LOSO**: 36 folds (string `fold` key like `A01_rep0`). Test always uses E session; train/val always use T sessions. Supported in both pipelines — resolved via `configs/data_splits_TE.json` (250 Hz) or `configs/data_splits_128.json` (128 Hz). Fold assignments are identical between the two configs (same seed=42).
 
 ### Key Constants (250 Hz pipeline)
 - 22 EEG channels, 250 Hz native, 4-second MI windows → shape `(n_trials, 22, 1000)`
@@ -240,4 +248,5 @@ The evaluator loads checkpoints from `experiments/checkpoints/` using the same n
 - 22 EEG channels, 128 Hz resampled, 2-second MI windows → shape `(n_trials, 22, 256)`
 - Trial window: 2.5–4.5 s after trial onset (0.5–2.5 s post-cue). Bandpass: 4–38 Hz (causal, order 3).
 - ERS: α = 1e-3, ε = 1e-4, init on first 1000 samples of continuous signal
-- Splits: 80/20 train/val per subject (seed = subject index), no LOSO
+- Subject-dependent splits: 80/20 train/val per subject (seed = subject index)
+- LOSO splits: 36 folds (9 subjects × 4 reps, seed=42) — identical fold assignments to 250 Hz pipeline
