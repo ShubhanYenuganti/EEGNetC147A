@@ -290,7 +290,11 @@ def main():
         description="Train on BCI Competition IV 2a (128 Hz / ERS pipeline)"
     )
 
-    parser.add_argument("--data_path",    type=str, default=_DEFAULT_DATA_PATH)
+    parser.add_argument("--band", type=str, default="full",
+                    choices=["delta","theta","mu","beta","gamma","mu_beta","full"])
+    parser.add_argument("--data_path", type=str, default=None,
+                        help="Override data directory. If not set, derived from --band.")
+
     parser.add_argument("--split_config", type=str, default=_DEFAULT_SPLIT_CFG)
 
     parser.add_argument("--model", type=str, required=True,
@@ -319,6 +323,14 @@ def main():
                         help="P(negate trial amplitude) per sample (0=off, 0.5 recommended)")
 
     args = parser.parse_args()
+
+    if args.data_path is None:
+        if args.band == "full":
+            # default behaviour — use existing preprocessed data, no band_preprocess needed
+            args.data_path = _DEFAULT_DATA_PATH
+        else:
+            args.data_path = os.path.join(_ROOT, "data", "processed", f"bci_competition_iv_2a_128_{args.band}")
+
 
     if args.mode == "subject_dependent" and args.subject is None:
         parser.error("--subject is required for subject_dependent mode")
