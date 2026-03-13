@@ -370,9 +370,10 @@ def main():
     # Output paths
     # ------------------------------------------------------------------
     if args.mode == "subject_dependent":
-        run_id = f"{args.model}_{args.subject}_subject_dependent_128"
+        run_id = f"{args.model}_{args.subject}_subject_dependent_128_{args.band}"
     else:
-        run_id = f"{args.model}_{args.fold}_loso_128"
+        run_id = f"{args.model}_{args.fold}_loso_128_{args.band}"
+
 
     checkpoint_path = os.path.join("experiments", "checkpoints", f"{run_id}_best.pt")
     results_path    = os.path.join("experiments", "results",      f"{run_id}.json")
