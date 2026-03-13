@@ -251,7 +251,7 @@ def train(
             print(f"  ✓ Saved checkpoint (smoothed_val={smoothed_val:.2%})")
         else:
             epochs_no_improve += 1
-            if epochs_no_improve >= early_stop_patience and epoch > 50:   # was epoch > 100
+            if epochs_no_improve >= early_stop_patience and epoch > 100:   # was epoch > 100
                 print(f"\nEarly stopping at epoch {epoch} "
                       f"(no improvement for {early_stop_patience} epochs)")
                 break

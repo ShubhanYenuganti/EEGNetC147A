@@ -130,12 +130,12 @@ class TCN(nn.Module):
         # EEGNet front-end
         F1:             int   = 8,
         D:              int   = 2,
-        eegnet_dropout: float = 0.3,
+        eegnet_dropout: float = 0.2,
         # TCN blocks
         tcn_filters:    int   = 12,
         tcn_kernel:     int   = 4,
         tcn_layers:     int   = 2,
-        tcn_dropout:    float = 0.3,
+        tcn_dropout:    float = 0.4,
         # Classifier
         fc_dropout:     float = 0.5,
         track_running_stats: bool = True
@@ -212,7 +212,7 @@ class TCN(nn.Module):
         x = self.depthwise_conv(x)   # (B, F2, 1, T//8)
         x = x.squeeze(2)             # (B, F2, T//8)
         x = self.tcn(x)              # (B, tcn_filters, T//8)
-        x = x[:, :, -1]             # take last timestep — causal output
+        x = x.mean(dim=-1)            # take last timestep — causal output
         return x
  
     def forward(self, x: torch.Tensor) -> torch.Tensor:
