@@ -24,6 +24,8 @@ parser.add_argument("--min_epoch",       default="100")
 parser.add_argument("--aug_shift",       default="64")
 parser.add_argument("--label_smoothing", default="0.1")
 parser.add_argument("--sign_flip_p",     default="0.0")
+parser.add_argument("--band", default="full",
+                    choices=["delta","theta","mu","beta","gamma","mu_beta","full"])
 args = parser.parse_args()
 
 with open("configs/data_splits_128.json") as f:
@@ -76,6 +78,7 @@ for s_idx, subj in enumerate(subjects_order):
             "--model",        args.model,
             "--mode",         "loso",
             "--fold",         fold_key,
+            "--band",    args.band,
             "--epochs",       args.epochs,
             "--lr",           args.lr,
             "--weight_decay", args.weight_decay,

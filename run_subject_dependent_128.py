@@ -21,6 +21,8 @@ parser.add_argument("--min_epoch",       default="100")
 parser.add_argument("--aug_shift",       default="64")
 parser.add_argument("--label_smoothing", default="0.1")
 parser.add_argument("--sign_flip_p",     default="0.0")
+parser.add_argument("--band", default="full",
+                    choices=["delta","theta","mu","beta","gamma","mu_beta","full"])
 args = parser.parse_args()
 
 print(f"Subject-dependent training (128 Hz): {args.model} | "
@@ -37,6 +39,7 @@ for subj in SUBJECTS:
         "--model",        args.model,
         "--mode",         "subject_dependent",
         "--subject",      subj,
+        "--band",         args.band,
         "--epochs",       args.epochs,
         "--lr",           args.lr,
         "--weight_decay", args.weight_decay,
