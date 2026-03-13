@@ -77,7 +77,8 @@ def get_model(model_name: str, n_channels: int = 22, n_classes: int = 4, dropout
                           n_timepoints=256, sfreq=128, dropout_rate=dropout_rate)
     elif model_name == "tcn":
         from src.models.tcn import TCN
-        return TCN(n_channels=n_channels, n_classes=n_classes)
+        return TCN(n_channels=n_channels, n_classes=n_classes,
+               n_timepoints=256, sfreq=128, track_running_stats=False)
     elif model_name == "lstm":
         from src.models.lstm import LSTM
         return LSTM(n_channels=n_channels, n_classes=n_classes)
