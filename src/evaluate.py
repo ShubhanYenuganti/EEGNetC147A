@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -241,12 +242,33 @@ def evaluate_loso(model_name: str, device: torch.device, split_config: str = "co
 
 def save_results(results: dict, model_name: str, mode: str) -> None:
     """Save evaluation results to JSON."""
-    out_dir  = os.path.join("experiments", "results")
+    out_dir = os.path.join("experiments", "results")
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"{model_name}_{mode}_eval.json")
 
+    # Pull training hyperparams from the first available training results JSON.
+    training_config = None
+    if mode == "subject_dependent":
+        candidates = [
+            os.path.join(out_dir, f"{model_name}_{s}_subject_dependent.json")
+            for s in SUBJECTS
+        ]
+    else:
+        candidates = [
+            os.path.join(out_dir, f"{model_name}_{s}_rep0_loso.json")
+            for s in SUBJECTS
+        ]
+    for path in candidates:
+        if os.path.exists(path):
+            with open(path) as f:
+                training_config = json.load(f).get("config")
+            break
+
+    payload = {"training_config": training_config, **results}
+
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path = os.path.join(out_dir, f"{model_name}_{mode}_eval_{ts}.json")
     with open(out_path, "w") as f:
-        json.dump(results, f, indent=2)
+        json.dump(payload, f, indent=2)
 
     print(f"\nResults saved to: {out_path}")
 
