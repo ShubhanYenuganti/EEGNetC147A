@@ -191,7 +191,7 @@ def train(
     )
     criterion = nn.CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="max", patience=10, factor=0.5
+        optimizer, mode="max", patience=50, factor=0.5
     )
 
     history = {
@@ -245,6 +245,7 @@ def train(
         if smoothed_val > best_val_acc:
             best_val_acc = smoothed_val
             torch.save(model.state_dict(), checkpoint_path)
+            epochs_no_improve = 0
             print(f"  ✓ Saved checkpoint (smoothed_val={smoothed_val:.2%})")
         else:
             epochs_no_improve += 1
