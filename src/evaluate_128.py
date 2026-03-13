@@ -14,6 +14,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 
 import numpy as np
 import torch
@@ -25,7 +26,8 @@ from src.data.dataloader import BCIDataLoader
 # Constants
 # ---------------------------------------------------------------------------
 
-SUBJECTS = [f"A{i:02d}" for i in range(1, 10)]
+SUBJECTS  = [f"A{i:02d}" for i in range(1, 10)]
+LOSO_REPS = 4
 
 _ROOT             = os.path.join(os.path.dirname(__file__), "..")
 _DEFAULT_DATA_PATH = os.path.join(_ROOT, "data", "processed", "bci_competition_iv_2a_128")
@@ -139,6 +141,72 @@ def evaluate_subject_dependent(
 
 
 # ---------------------------------------------------------------------------
+# LOSO evaluation
+# ---------------------------------------------------------------------------
+
+def evaluate_loso(
+    model_name:  str,
+    device:      torch.device,
+    data_path:   str,
+    split_config: str,
+) -> dict:
+    with open(split_config) as f:
+        config = json.load(f)
+
+    fold_keys = []
+    for key in config["loso"].keys():
+        match = re.search(r"_rep(\d+)$", key)
+        if match and int(match.group(1)) < LOSO_REPS:
+            fold_keys.append(key)
+    fold_keys.sort()
+
+    results = {}
+
+    print(f"\nLOSO evaluation (128 Hz): {model_name}")
+    print(f"Using {LOSO_REPS} permutations per subject ({len(fold_keys)} folds total)")
+    print(f"{'Fold':>12}  {'Test Acc':>8}")
+    print("-" * 24)
+
+    loader_kwargs = dict(
+        mode="loso",
+        batch_size=64,
+        shuffle=False,
+        data_path=data_path,
+        split_config=split_config,
+    )
+
+    for fold in fold_keys:
+        checkpoint_path = os.path.join(
+            "experiments", "checkpoints",
+            f"{model_name}_{fold}_loso_128_best.pt",
+        )
+
+        try:
+            model = load_model(model_name, checkpoint_path, device)
+        except FileNotFoundError as e:
+            print(f"{fold:>12}  MISSING CHECKPOINT")
+            print(f"               {e}")
+            continue
+
+        # No normalizer — ERS already applied in alternative_preprocess.py
+        test_loader = BCIDataLoader(fold=fold, split="test", **loader_kwargs)
+
+        acc = evaluate_one(model, test_loader, device)
+        results[fold] = acc
+        print(f"{fold:>12} {acc:>7.2%}")
+
+    if results:
+        accs = list(results.values())
+        results["mean"] = float(np.mean(accs))
+        results["std"]  = float(np.std(accs))
+        print("-" * 24)
+        print(f"{'Mean':>12} {results['mean']:>7.2%}")
+        print(f"{'Std':>12} {results['std']:>7.2%}")
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Results saving
 # ---------------------------------------------------------------------------
 
@@ -169,7 +237,7 @@ def main():
                                  "cnn_lstm_alternative", "tcn", "lstm",
                                  "cnn_gru", "cnn_gru_alternative", "transformer"])
     parser.add_argument("--mode", type=str, required=True,
-                        choices=["subject_dependent"])   # loso not implemented for 128 Hz yet
+                        choices=["subject_dependent", "loso"])
 
     args = parser.parse_args()
 
@@ -180,6 +248,10 @@ def main():
 
     if args.mode == "subject_dependent":
         results = evaluate_subject_dependent(
+            args.model, device, args.data_path, args.split_config
+        )
+    else:
+        results = evaluate_loso(
             args.model, device, args.data_path, args.split_config
         )
 
