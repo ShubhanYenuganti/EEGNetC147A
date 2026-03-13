@@ -384,6 +384,7 @@ def main():
         "subject":      args.subject,
         "fold":         args.fold,
         "epochs":       args.epochs,
+        "band":         args.band,
         "lr":           args.lr,
         "batch_size":   args.batch_size,
         "weight_decay": args.weight_decay,
