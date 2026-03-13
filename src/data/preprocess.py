@@ -175,10 +175,10 @@ def load_mat(filepath: str) -> dict:
     mat  = scipy.io.loadmat(filepath, simplify_cells=True)
     runs = mat["data"]
 
-    X_list, trial_list, y_list, art_list = [], [], [], []
+    X_list, trial_list, y_list, art_list, run_list = [], [], [], [], []
     offset = 0
 
-    for run in runs:
+    for run_idx, run in enumerate(runs):
         X         = run["X"]                          # (n_samples, 25)
         trial     = run["trial"].astype(np.int64)     # (n_trials,)
         y         = np.asarray(run["y"]).ravel()
@@ -188,6 +188,7 @@ def load_mat(filepath: str) -> dict:
         trial_list.append(trial + offset)
         y_list.append(y)
         art_list.append(artifacts)
+        run_list.append(np.full(len(trial), run_idx + 1, dtype=np.int32))
         offset += X.shape[0]
 
     first = runs[0]
@@ -196,6 +197,7 @@ def load_mat(filepath: str) -> dict:
         "trial":     np.concatenate(trial_list),
         "y":         np.concatenate(y_list).astype(np.int32),
         "artifacts": np.concatenate(art_list).astype(np.int32),
+        "run":       np.concatenate(run_list).astype(np.int32),
         "fs":        int(first["fs"]),
         "gender":    first.get("gender", "unknown"),
         "age":       first.get("age",    "unknown"),
@@ -220,17 +222,19 @@ def process(mat: dict) -> tuple[np.ndarray, np.ndarray]:
     # assumed only trailing trials could be dropped (now any trial can be skipped).
     X_epochs, clean_idx = extract_trials(X_filt, mat["trial"], mat["artifacts"])
 
-    # Align labels using the indices of kept trials (safe for mid-sequence drops)
-    y = mat["y"][clean_idx]
+    # Align labels and run indices using the indices of kept trials
+    y   = mat["y"][clean_idx]
+    run = mat["run"][clean_idx]
 
-    return X_epochs, y
+    return X_epochs, y, run
 
 
-def save(X: np.ndarray, y: np.ndarray, fname_stem: str) -> None:
-    """Save X and y arrays as .npy files under OUT_DIR."""
+def save(X: np.ndarray, y: np.ndarray, run: np.ndarray, fname_stem: str) -> None:
+    """Save X, y, and run arrays as .npy files under OUT_DIR."""
     os.makedirs(OUT_DIR, exist_ok=True)
     np.save(os.path.join(OUT_DIR, f"{fname_stem}_X.npy"), X)
     np.save(os.path.join(OUT_DIR, f"{fname_stem}_y.npy"), y)
+    np.save(os.path.join(OUT_DIR, f"{fname_stem}_run.npy"), run)
 
 
 # ---------------------------------------------------------------------------
@@ -283,8 +287,8 @@ def main():
             spinner = _Spinner(f"  Processing {fname}")
             spinner.start()
             mat = load_mat(fpath)
-            X_epochs, y = process(mat)
-            save(X_epochs, y, f"{subject}{suffix}")
+            X_epochs, y, run = process(mat)
+            save(X_epochs, y, run, f"{subject}{suffix}")
             spinner.stop()
 
             n_dropped = int(np.sum(mat["artifacts"]))

@@ -102,7 +102,7 @@ class EEGNet(nn.Module):
             padding      = (0, self._TEMPORAL_KERNEL // 2),   # exact "same"
             bias         = False,
         )
-        self.bn1 = nn.BatchNorm2d(F1)
+        self.bn1 = nn.BatchNorm2d(F1, track_running_stats=False)
 
         # Step 2: DepthwiseConv2D — (C, 1), mode=valid, depth=D, max norm=1
         # groups=F1 implements depthwise (each filter processed independently)
@@ -116,7 +116,7 @@ class EEGNet(nn.Module):
             padding      = (0, 0),   # mode=valid
             bias         = False,
         )
-        self.bn2     = nn.BatchNorm2d(F1 * D)
+        self.bn2     = nn.BatchNorm2d(F1 * D, track_running_stats=False)
         self.elu1    = nn.ELU()
         self.pool1   = nn.AvgPool2d(kernel_size=(1, self._POOL1))
         self.drop1   = nn.Dropout(p=dropout_rate)
@@ -144,7 +144,7 @@ class EEGNet(nn.Module):
             kernel_size  = (1, 1),
             bias         = False,
         )
-        self.bn3   = nn.BatchNorm2d(F2)
+        self.bn3   = nn.BatchNorm2d(F2, track_running_stats=False)
         self.elu2  = nn.ELU()
         self.pool2 = nn.AvgPool2d(kernel_size=(1, self._POOL2))
         self.drop2 = nn.Dropout(p=dropout_rate)
