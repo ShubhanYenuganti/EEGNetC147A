@@ -91,7 +91,7 @@ def get_model(model_name: str, n_channels: int = 22, n_classes: int = 4, dropout
                          cnn_dropout=dropout_rate, fc_dropout=dropout_rate)
     elif model_name == "transformer":
         from src.models.transformer import EEGTransformer
-        return EEGTransformer(n_channels=n_channels, n_classes=n_classes)
+        return EEGTransformer(n_channels=n_channels, n_classes=n_classes, cnn_dropout=dropout_rate)
     elif model_name == "dummy":
         from src.models.dummy import Dummy
         return Dummy(n_channels=n_channels, n_classes=n_classes)
