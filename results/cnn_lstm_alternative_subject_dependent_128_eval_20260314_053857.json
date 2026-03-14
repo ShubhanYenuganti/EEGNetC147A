@@ -1,0 +1,71 @@
+{
+  "training_config": {
+    "model": "cnn_lstm_alternative",
+    "mode": "subject_dependent",
+    "subject": "A01",
+    "fold": null,
+    "epochs": 300,
+    "lr": 0.001,
+    "batch_size": 16,
+    "weight_decay": 0.0005,
+    "device": "cuda",
+    "data_path": "/home/dhruvpatel/EEGNetC147A/src/../data/processed/bci_competition_iv_2a_128",
+    "split_config": "/home/dhruvpatel/EEGNetC147A/src/../configs/data_splits_128.json",
+    "norm": "none (ERS applied in preprocessing)"
+  },
+  "A01": {
+    "train_acc": 0.6529680365296804,
+    "val_acc": 0.5925925925925926,
+    "test_acc": 0.49466192170818507
+  },
+  "A02": {
+    "train_acc": 0.6203703703703703,
+    "val_acc": 0.3333333333333333,
+    "test_acc": 0.33568904593639576
+  },
+  "A03": {
+    "train_acc": 0.7731481481481481,
+    "val_acc": 0.6851851851851852,
+    "test_acc": 0.6886446886446886
+  },
+  "A04": {
+    "train_acc": 0.40476190476190477,
+    "val_acc": 0.3076923076923077,
+    "test_acc": 0.38596491228070173
+  },
+  "A05": {
+    "train_acc": 0.48095238095238096,
+    "val_acc": 0.46153846153846156,
+    "test_acc": 0.32608695652173914
+  },
+  "A06": {
+    "train_acc": 0.4602272727272727,
+    "val_acc": 0.3488372093023256,
+    "test_acc": 0.3953488372093023
+  },
+  "A07": {
+    "train_acc": 0.7373271889400922,
+    "val_acc": 0.7222222222222222,
+    "test_acc": 0.5956678700361011
+  },
+  "A08": {
+    "train_acc": 0.9056603773584906,
+    "val_acc": 0.6730769230769231,
+    "test_acc": 0.7232472324723247
+  },
+  "A09": {
+    "train_acc": 0.9421052631578948,
+    "val_acc": 0.851063829787234,
+    "test_acc": 0.7462121212121212
+  },
+  "mean": {
+    "train_acc": 0.6641689936606928,
+    "val_acc": 0.5528380071922874,
+    "test_acc": 0.5212803984468399
+  },
+  "std": {
+    "train_acc": 0.1817481796561606,
+    "val_acc": 0.18541661841062515,
+    "test_acc": 0.16067613928801694
+  }
+}
