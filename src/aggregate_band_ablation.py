@@ -137,13 +137,13 @@ def print_table(mode: str) -> None:
  
  
 def main() -> None:
+    global RESULTS_DIR
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["subject_dependent", "loso", "both"],
                         default="both")
     parser.add_argument("--results_dir", default=RESULTS_DIR)
     args = parser.parse_args()
- 
-    global RESULTS_DIR
+    
     RESULTS_DIR = args.results_dir
  
     if args.mode in ("subject_dependent", "both"):
