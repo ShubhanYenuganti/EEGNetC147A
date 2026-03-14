@@ -1,9 +1,12 @@
 """
-CNN+GRU Hybrid: Convolutional-Recurrent Network for EEG Motor Imagery Classification
-=====================================================================================
+CNN+GRU Hybrid — 128 Hz / ERS pipeline variant (alternative).
+==============================================================
+
+This is the explicit 128 Hz-pipeline copy of cnn_gru.py, used by train_128.py
+and evaluate_128.py under the model name "cnn_gru_alternative".
 
 Architecture for BCI Competition IV Dataset 2a:
-  - 22 channels, 1000 timepoints (4s @ 250Hz), 4 classes
+    - 22 channels, 256 timepoints (2s @ 128Hz), 4 classes
 
 Design philosophy:
   CNN front-end (inspired by EEGNet) extracts local spatial-temporal features,
@@ -18,7 +21,12 @@ Pipeline:
   5. Attention pool  -> weighted aggregation of GRU hidden states
   6. Classifier      -> linear projection to class logits
 
-Reference baseline: EEGNet (Lawhern et al., 2018) -- ~2K params, ~68-72% 4-class
+128 Hz design correctness:
+  - temporal_kernel = sfreq // 2 = 64 at 128 Hz (≥2 Hz frequency resolution)
+  - sep_kernel = sfreq // 8 = 16 at 128 Hz
+  - Pool ×4 then ×8 → T=256 reduces to T=8 (meaningful GRU sequence length)
+  - BatchNorm2d uses track_running_stats=False (correct for cross-subject eval)
+  - dropout forwarded from training CLI (--dropout flag)
 
 Tuned defaults (3-round grid search, optimised for cross-subject generalization):
   Round 1: lr=0.001, wd=5e-4
@@ -76,8 +84,8 @@ class CNNGRU(nn.Module):
     Args:
         n_classes      : number of output classes (default: 4)
         n_channels     : number of EEG channels (default: 22 for BCI-IV-2a)
-        n_timepoints   : number of time samples (default: 1000 = 4s @ 250Hz)
-        sfreq          : sampling frequency in Hz (default: 250)
+        n_timepoints   : number of time samples (default: 256 = 2s @ 128Hz)
+        sfreq          : sampling frequency in Hz (default: 128)
         F1             : number of temporal filters (default: 8)
         D              : depth multiplier for depthwise conv (default: 2)
         cnn_dropout    : dropout after CNN blocks (default: 0.4)
@@ -93,8 +101,8 @@ class CNNGRU(nn.Module):
         self,
         n_classes: int = 4,
         n_channels: int = 22,
-        n_timepoints: int = 1000,
-        sfreq: int = 250,
+        n_timepoints: int = 256,
+        sfreq: int = 128,
         # CNN hyper-parameters
         F1: int = 8,
         D: int = 2,
@@ -119,7 +127,7 @@ class CNNGRU(nn.Module):
         F2 = F1 * D  # pointwise filter count
 
         # -- CNN Block 1: temporal + depthwise spatial filtering -------------
-        temporal_kernel = sfreq // 2  # 125 for 250 Hz -- captures ~2 Hz bandwidth
+        temporal_kernel = sfreq // 2  # captures ~2 Hz bandwidth
         self.cnn_block1 = nn.Sequential(
             # Temporal convolution -- frequency-specific feature extraction
             nn.Conv2d(
@@ -128,7 +136,7 @@ class CNNGRU(nn.Module):
                 padding=(0, temporal_kernel // 2),
                 bias=False,
             ),
-            nn.BatchNorm2d(F1),
+            nn.BatchNorm2d(F1, track_running_stats = False),
 
             # Depthwise spatial convolution -- learns channel (electrode) mixing
             nn.Conv2d(
@@ -137,14 +145,14 @@ class CNNGRU(nn.Module):
                 groups=F1,
                 bias=False,
             ),
-            nn.BatchNorm2d(F2),
+            nn.BatchNorm2d(F2, track_running_stats = False),
             nn.ELU(),
-            nn.AvgPool2d(kernel_size=(1, 4)),   # 1000 -> 250
+            nn.AvgPool2d(kernel_size=(1, 4)),   # T -> T/4
             nn.Dropout(cnn_dropout),
         )
 
         # -- CNN Block 2: separable convolution for refined features ---------
-        sep_kernel = sfreq // 8  # 32 for 250 Hz
+        sep_kernel = sfreq // 8
         self.cnn_block2 = nn.Sequential(
             # Depthwise temporal conv
             nn.Conv2d(
@@ -156,9 +164,9 @@ class CNNGRU(nn.Module):
             ),
             # Pointwise conv
             nn.Conv2d(F2, F2, kernel_size=(1, 1), bias=False),
-            nn.BatchNorm2d(F2),
+            nn.BatchNorm2d(F2, track_running_stats = False),
             nn.ELU(),
-            nn.AvgPool2d(kernel_size=(1, 8)),   # 250 -> 31
+            nn.AvgPool2d(kernel_size=(1, 8)),   # T/4 -> T/32
             nn.Dropout(cnn_dropout),
         )
 
@@ -273,7 +281,7 @@ if __name__ == "__main__":
     print("=" * 65)
 
     model = CNNGRU()
-    x = torch.randn(8, 1, 22, 1000)  # batch of 8, 22 channels, 4s @ 250Hz
+    x = torch.randn(8, 1, 22, model.n_timepoints)
 
     # Forward pass
     logits = model(x)
@@ -291,7 +299,7 @@ if __name__ == "__main__":
     )
 
     # 3-D input convenience
-    x_3d = torch.randn(4, 22, 1000)
+    x_3d = torch.randn(4, 22, model.n_timepoints)
     logits3 = model(x_3d)
     assert logits3.shape == (4, 4), "3-D input handling failed"
 

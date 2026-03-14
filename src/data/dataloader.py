@@ -19,63 +19,11 @@ modes are supported:
 
 EEGNet (and all other architectures in this project) expect z-scored input.
 Normalization is per-channel, computed on training data only and applied to
-val/test. Use the `Normalizer` helper:
-
-    from src.data.dataloader import BCIDataLoader, Normalizer
-
-    train_loader = BCIDataLoader(mode='subject_dependent', subject='A01',
-                                 split='train', batch_size=32)
-
-    norm = Normalizer()
-    norm.fit(train_loader.dataset.X)   # fit on raw training tensors
-
-    val_loader  = BCIDataLoader(..., split='val',  normalizer=norm)
-    test_loader = BCIDataLoader(..., split='test', normalizer=norm)
-
-    # Or apply post-hoc to an already-created loader's dataset:
-    norm.apply_(train_loader.dataset)
+val/test. Use the `Normalizer` helper.
 
 The Normalizer computes mean and std across (trials, timepoints) independently
 for each of the 22 channels, then stores them so they can be reused for val/
 test without any leakage.
-
-## API
-
-### Subject-dependent
-
-    loader = BCIDataLoader(
-        mode='subject_dependent',
-        subject='A01',
-        split='train',
-        batch_size=32,
-        shuffle=True,
-    )
-
-    for X_batch, y_batch in loader:
-        # X_batch: (batch, 22, 1000)  float32
-        # y_batch: (batch,)           long  (0-indexed: 0=Left, 1=Right, 2=Feet, 3=Tongue)
-        ...
-
-### LOSO
-
-    loader = BCIDataLoader(
-        mode='loso',
-        fold=0,
-        split='train',
-        batch_size=32,
-        shuffle=True,
-    )
-
-### Optional arguments
-
-    BCIDataLoader(
-        ...,
-        data_path='data/processed/bci_competition_iv_2a',
-        split_config='configs/data_splits.json',
-        num_workers=0,
-        transform=None,      # callable applied to each X tensor (after normalization)
-        normalizer=None,     # Normalizer instance; applies norm during __getitem__
-    )
 """
 
 import json
@@ -183,16 +131,25 @@ class BCIDataset(Dataset):
 
     Labels are shifted from 1-indexed (1–4) to 0-indexed (0–3) so they work
     directly with PyTorch's CrossEntropyLoss.
+
+    Each item is a 3-tuple ``(x, y, subject_id)`` where ``subject_id`` is an
+    integer in 0–8 (A01→0 … A09→8). It is -1 when subject identity is not
+    tracked (e.g. subject-dependent mode).
     """
 
     def __init__(
         self,
-        X:         np.ndarray,
-        y:         np.ndarray,
-        transform: Optional[Callable] = None,
+        X:           np.ndarray,
+        y:           np.ndarray,
+        subject_ids: Optional[np.ndarray] = None,
+        transform:   Optional[Callable]   = None,
     ):
         self.X         = torch.tensor(X, dtype=torch.float32)
         self.y         = torch.tensor(y - 1, dtype=torch.long)   # 1–4 → 0–3
+        if subject_ids is not None:
+            self.subject_ids = torch.tensor(subject_ids, dtype=torch.long)
+        else:
+            self.subject_ids = torch.full((len(y),), -1, dtype=torch.long)
         self.transform = transform
 
     def __len__(self) -> int:
@@ -202,7 +159,7 @@ class BCIDataset(Dataset):
         x = self.X[idx]
         if self.transform is not None:
             x = self.transform(x)
-        return x, self.y[idx]
+        return x, self.y[idx], self.subject_ids[idx]
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +236,7 @@ class BCIDataLoader:
         # subject_dependent args
         subject: Optional[str] = None,
         # loso args
-        fold: Optional[int] = None,
+        fold: Optional[str] = None,
         # shared / optional
         data_path:    str = _DEFAULT_DATA_PATH,
         split_config: str = _DEFAULT_CONFIG,
@@ -298,11 +255,11 @@ class BCIDataLoader:
             config = json.load(f)
 
         if mode == "subject_dependent":
-            X, y = self._build_subject_dependent(config, data_path, subject, split)
+            X, y, subject_ids = self._build_subject_dependent(config, data_path, subject, split)
         else:
-            X, y = self._build_loso(config, data_path, fold, split)
+            X, y, subject_ids = self._build_loso(config, data_path, fold, split)
 
-        dataset = BCIDataset(X, y, transform=transform)
+        dataset = BCIDataset(X, y, subject_ids=subject_ids, transform=transform)
 
         # Apply normalizer if provided (caller fitted it on training data)
         if normalizer is not None:
@@ -324,16 +281,20 @@ class BCIDataLoader:
         if subject is None:
             raise ValueError("'subject' is required for mode='subject_dependent'")
 
+        sid = int(subject[1:]) - 1   # "A01" → 0, "A09" → 8
+
         subj_cfg = config["subject_dependent"][subject]
         if split == "test":
             test_session = subj_cfg.get("test_session", subj_cfg.get("session", "T"))
             X, y = _load_npy(data_path, subject, test_session)
-            return X, y
         else:
             indices = subj_cfg[split]
             train_session = subj_cfg.get("train_session", subj_cfg.get("session", "T"))
             X, y = _load_npy(data_path, subject, train_session)
-            return X[indices], y[indices]
+            X, y = X[indices], y[indices]
+
+        subject_ids = np.full(len(y), sid, dtype=np.int64)
+        return X, y, subject_ids
 
     @staticmethod
     def _build_loso(config, data_path, fold, split):
@@ -352,12 +313,18 @@ class BCIDataLoader:
             subjects = [fold_cfg["test_subject"]]
             sessions = fold_cfg["test_sessions"]
 
-        Xs, ys = [], []
+        Xs, ys, sids = [], [], []
         for subj in subjects:
             X, y = _concat_sessions(data_path, subj, sessions)
+            sid  = int(subj[1:]) - 1   # "A01" → 0, "A09" → 8
             Xs.append(X)
             ys.append(y)
-        return np.concatenate(Xs, axis=0), np.concatenate(ys, axis=0)
+            sids.append(np.full(len(y), sid, dtype=np.int64))
+        return (
+            np.concatenate(Xs,   axis=0),
+            np.concatenate(ys,   axis=0),
+            np.concatenate(sids, axis=0),
+        )
 
     # ------------------------------------------------------------------
     # DataLoader pass-through
